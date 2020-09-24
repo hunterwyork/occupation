@@ -1,0 +1,404 @@
+---
+title: "dot_census_explore"
+author: "Hunter York"
+date: "9/19/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DescTools)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+
+#options
+theme_set(theme_bw())
+
+#set wd
+setwd("~/Documents/projects/occupation")
+```
+
+
+# Introduction
+
+This is an exploratory document detailing the relationship between census and dot occupation codes. 
+
+# Task 1
+
+## Number of DOT occupations nested within each census occupation category
+
+### Code setup
+
+The following code cleans and merges the DOT and Census crosswalk file to the complete DOT title set by the first three digits of the DOT code. Codes that have two digits were inferred to have a leading 0, and a quick check seems to validate this. 
+
+```{r}
+# read in map. This is DOT1939 to 1940 Census map
+dot_cen_map <- read_xlsx("ref/DOT1939_to_CEN1940.xlsx") %>% 
+  data.table()
+
+# read in occ to occ1940 conversion since the data uses the latter
+occ_ooc_conv <- read_xls("ref/occ_occ1940.xls") %>% 
+  data.table()
+
+# merge
+dot_cen_map <- merge(dot_cen_map, occ_ooc_conv[!is.na(OCC1940)], by.x = "Census1940", by.y = "OCC1940", all.x = T)
+dot_cen_map[,Census1940 := OCC]
+
+# clean up messy vars, for 2 digit codes, insert a 0
+dot_cen_map[, clean_dot_code := gsub("[^0-9]", "", DOT1939)]
+dot_cen_map[nchar(clean_dot_code) == 2,
+            clean_dot_code := paste0("0",clean_dot_code)]
+dot_cen_map[, Census1940 := gsub("\n", "", Census1940)]
+dot_cen_map[, `Titles of 1940 Census` := gsub("\n", 
+                                              "",
+                                              `Titles of 1940 Census` )]
+
+# load complete list of dot codes
+dot_complete <- read_xlsx("ref/DOT_1ed_1939.xlsx",col_names = F) %>% 
+  data.table() %>% setnames(., c("dot_code", "dot_description"))
+
+# create new var of prefix of dot codes to match map
+dot_complete[,clean_dot_code := substr(gsub("[^0-9]", "", dot_code),1,3)]
+
+# do a cartesian merge to allow all combos of of dot codes
+# to match potential census codes
+mg_cen_dot_map <- merge(dot_complete, dot_cen_map, all.y = T, allow.cartesian = T, by = "clean_dot_code")
+
+# also  only include most granular dot codes
+mg_cen_dot_map <- mg_cen_dot_map[nchar(dot_code) != 5]
+
+# drop nas from output. These are header rows in the dot_cen_map, so 
+# nothing is really dropped
+mg_cen_dot_map <- mg_cen_dot_map[!is.na(clean_dot_code) & 
+                                   clean_dot_code != "<NA>" &
+                                   clean_dot_code != ""]
+
+# only preserve important columns
+mg_cen_dot_map <- mg_cen_dot_map[,.(clean_dot_code, dot_code, dot_description, `Titles of 1940 Census`, Census1940, Occupation)]
+
+```
+
+### Drawbacks
+
+A quick face validity seems to indicate this is an appropriate merge for some Census codes and an inappropriate merge for others. For example, I will show the Census category "Artists and art teachers" which is Census1940 == "V00." As you can see, this merge does a good job capturing all kinds of artists and art teachers, (there's 95 matches).
+
+```{r}
+head(mg_cen_dot_map[Census1940 == "V00"])
+```
+
+Compare this to Census1940 == "134" which is the Census category "Postmasters". This gets matched to a number of government service professions. Perhaps of which the only relevant one might be "Censor II." (There are a total of 17 matches). I'm afraid carrying out the analysis without a step to weed out these bad matches would be a mistake. Potential solutions might be to explore the extent to which this phenomenon is limited to trades vs. true hierarchical structures? I'd imagine trades will have a more proper nesting structure such that a census code will capture a number of DOT codes that are encapsulated within it, whereas hierarchical agency census codes might map to DOT codes that capture a number of irrelevant professions.
+
+```{r}
+tail(mg_cen_dot_map[Census1940 == "134"])
+```
+
+\newpage 
+
+### Visualizing it anyway
+
+Regardless of the above problem, I'm moving forward with the analysis for now. Below is a graph of the number of DOT codes that match each Census code using the crosswalk as it currently stands. 
+
+All merges are done using the Census variables, some of which can be mapped to the same Census Occupation title. For display purposes, the variables are concatenated. I've dropped "988", "Not specified".
+
+"occ" and "occ1950" do not match 1:1. 
+
+```{r}
+# count unique codes by census category
+cen_dot_code_counts<- mg_cen_dot_map[,.(num_dot_codes = length(unique(dot_code))), 
+                                     by = .(Census1940, Occupation)]
+
+# create variable for graphing
+cen_dot_code_counts[, var_title := paste0(Census1940, 
+                                          substr(Occupation,
+                                                 1,30), "...")]
+
+# Remove unmapped
+cen_dot_code_counts <- cen_dot_code_counts[Census1940 != "988"]
+
+# sort by freq
+cen_dot_code_counts[,var_title := factor(var_title,
+                                         
+                                         levels = cen_dot_code_counts[order(num_dot_codes),
+                                                                      var_title])]
+
+cen_dot_code_counts <- cen_dot_code_counts[order(num_dot_codes)]
+```
+
+\newpage
+
+### Results
+
+```{r,fig.width=6, fig.height=8,echo=F,message=FALSE,warning =FALSE,results = 'asis'}
+
+for(i in 3:1) {
+  cat("  \n### Rows ",  (70*(i-1)), " to ",(70), " \n")
+  print(ggplot(cen_dot_code_counts[(90*(i-1)):(90*i)]) + 
+          geom_bar(aes(x = var_title,
+                       y = num_dot_codes),
+                   stat = "identity") + 
+          scale_y_continuous(trans = "pseudo_log",
+                             labels = c(0,1,2,5,10,20,50,100, 210),
+                             breaks = c(0,1,2,5,10,20,50,100, 210),
+                             limits = c(0, 210))+
+          theme(axis.text = element_text(size = 6))+
+          xlab("Census Title") + 
+          ylab("Number of Unique Nested DOT codes")+
+          coord_flip())
+  cat("  \n")
+}
+```
+
+\newpage 
+
+# Task II - How does this correlate with within-occupation heterogeneity in earnings
+
+## Setup
+
+For simplicity's sake, I'm subsetting to current workers who aren't in school in the working age population 25-64 and who work at least 30 hour weeks.
+
+```{r, echo = F}
+# load data and save as r object for faster loading
+#census_1940 <- data.table(read.dta13("inputs/usa_00003.dta"))
+#saveRDS(census_1940, "inputs/usa_00003.rds")
+
+# load data from saved rds
+census_1940 <- readRDS("inputs/usa_00003.rds")
+
+# only keep relevant vars for now
+census_1940 <- census_1940[,.(serial, hhwt, region, statefip, urban, 
+                              metro, farm, 
+                              multgen, pernum, perwt,sex,age,agemonth, race,hispan, bpl,
+                              school, higraded, empstat, empstatd, labforce, occ,
+                              occ1950, ind, ind1950, classwkr, classwkrd, wkswork1,
+                              wkswork2, hrswork1, hrswork2, durunemp, uocc, uocc95, 
+                              uind, uclasswk, incwage, incnonwg, occscore, sei, presgl,
+                              erscor50, edscor50, npboss50, migrate5, migrate5d)]
+
+# subset
+census_1940 <- census_1940[empstat == "employed" &
+                             school == "no, not in school" &
+                             age %in% 25:64 &
+                             hrswork1 >= 30 &
+                             incwage != 999998]
+
+# derive a income/hr worked per week var
+census_1940[, income_per_hr := incwage/hrswork1]
+
+# derive a 5-year age var
+census_1940[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                                " to ", 
+                                floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+# make occ var char
+census_1940[, occ := as.character(occ)]
+
+# make first dig var
+census_1940[, first_dig := substr(occ, 1,1)]
+
+# make map for first dig categories
+map <- data.table(first_dig = as.character(0:9), 
+                  occ_categ = c("Professional", "Clerical", "Service",
+                                     "Agricultural, etc.", "Skilled", "Skilled",
+                                     "Semiskilled", "Semiskilled", "Unskilled",
+                                     "Unskilled"))
+census_1940 <- merge(census_1940, map, by = "first_dig")
+
+# calculate wage income gini coeff by occ (and other)
+gini_occ <- census_1940[,.(inc_gini = Gini(incwage),
+                           sd_gini = sd(incwage),
+                           inc_per_hr_gini = Gini(income_per_hr),
+                           number = .N),
+                        by = .(occ,occ_categ)]
+gini_occ_sex <- census_1940[,.(inc_gini = Gini(incwage),
+                           inc_per_hr_gini = Gini(income_per_hr),
+                             sd_gini = sd(incwage),
+                           number = .N),
+                           by = .(occ, occ_categ,sex)]
+gini_occ_sex_age <- census_1940[,.(inc_gini = Gini(incwage),
+                           inc_per_hr_gini = Gini(income_per_hr),
+                             sd_gini = sd(incwage),
+                           number = .N), 
+                           by = .(occ,occ_categ, sex,age_cat)]
+
+gini_occ <- merge(gini_occ, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+gini_occ_sex <- merge(gini_occ_sex, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+gini_occ_sex_age <- merge(gini_occ_sex_age, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+
+
+```
+
+\newpage
+
+## Graph Income Inequality against number of DOT/Census Occ Category
+
+```{r, echo = F}
+ggplot(gini_occ) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+  scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_wrap(~sex)+
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex_age[age_cat %like% "25|40|55"]) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_grid(age_cat~sex)+
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+```
+
+## Graph Standard deviation against number of DOT/Census Occ Category
+
+```{r, echo = F}
+ggplot(gini_occ) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = sd_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+  scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = sd_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_wrap(~sex)+
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex_age[age_cat %like% "25|40|55"]) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = sd_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_grid(age_cat~sex)+
+  ylab("Gini(Income)") +
+  labs(size = "Count", color = "First Occ Digit")
+```
+
+## Graph Income/hr Inequality against number of DOT/Census Occ Category
+
+```{r}
+ggplot(gini_occ) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_per_hr_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+  scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  ylab("Gini(Income/Hr/Week)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_per_hr_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_wrap(~sex)+
+  xlab("Gini(Income/Hr/wk)") +
+  labs(size = "Count", color = "First Occ Digit")
+
+ggplot(gini_occ_sex_age[age_cat %like% "25|40|55"]) + 
+  geom_point(aes(x = num_dot_codes, 
+                 y = inc_per_hr_gini,
+                 size = number,
+              color = occ_categ),
+             alpha = .5,
+             shape = 16) + 
+    scale_x_continuous(trans = "pseudo_log",
+                     breaks = c(0,1,2,5,10,20,50,100,200))+
+  xlab("Number of Dot Codes") + 
+  facet_grid(age_cat~sex)+
+  ylab("Gini(Income/hr/wk)") +
+  labs(size = "Count", color = "First Occ Digit")
+```
+
+
+# Task III - Does Census-Coded Industry give us any additional insight?
+
+```{r}
+# merge census 1940 file on ind codes
+ind_codes <- read_xlsx("ref/IND1940.xlsx") %>% data.table()
+ind_codes[, IND := as.numeric(IND)]
+census_1940 <- merge(census_1940, 
+                     ind_codes[!is.na(IND) & IND != 996], 
+                     by.x = "ind", by.y = "IND", all.x = T)
+
+# # calculate wage income gini coeff by occ (and other)
+# gini_ind_occ <- census_1940[,.(inc_gini = Gini(incwage),
+#                            sd_gini = sd(incwage),
+#                            inc_per_hr_gini = Gini(income_per_hr),
+#                            number = .N),
+#                         by = .(occ,ind,Industry,occ_categ)]
+# gini_ind_occ_sex <- census_1940[,.(inc_gini = Gini(incwage),
+#                            inc_per_hr_gini = Gini(income_per_hr),
+#                              sd_gini = sd(incwage),
+#                            number = .N),
+#                            by = .(occ,ind,Industry, occ_categ,sex)]
+# gini_ind_occ_sex_age <- census_1940[,.(inc_gini = Gini(incwage),
+#                            inc_per_hr_gini = Gini(income_per_hr),
+#                              sd_gini = sd(incwage),
+#                            number = .N), 
+#                            by = .(occ,ind,Industry,occ_categ, sex,age_cat)]
+# 
+# gini_ind_occ <- merge(gini_ind_occ, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+# gini_ind_occ_sex <- merge(gini_ind_occ_sex, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+# gini_ind_occ_sex_age <- merge(gini_ind_occ_sex_age, cen_dot_code_counts, by.x = "occ", by.y = "Census1940")
+```
