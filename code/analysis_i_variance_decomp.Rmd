@@ -1,0 +1,22 @@
+---
+title: "analysis_i_variance_decomp"
+author: "Hunter York"
+date: "9/27/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+library(DescTools)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+
+#options
+theme_set(theme_bw())
+```
