@@ -134,6 +134,10 @@ census_1940[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
 # make occ var char
 census_1940[, occ := as.character(occ)]
 
+# 
+census_1940[nchar(occ) == 1, occ := paste0("00", occ)]
+census_1940[nchar(occ) == 2, occ := paste0("0", occ)]
+
 # make first dig var
 census_1940[, first_dig := substr(occ, 1,1)]
 
@@ -152,3 +156,12 @@ census_1940 <- merge(census_1940,
                      ind_codes[!is.na(IND) & IND != 996], 
                      by.x = "ind", by.y = "IND", all.x = T)
 
+
+# merge census on occ codes
+mg_cen_dot_map_five <- merge(dot_complete, dot_cen_map, all.y = T, allow.cartesian = T, by = "clean_dot_code")
+mg_cen_dot_map_five <-mg_cen_dot_map_five[nchar(dot_code)==5]
+
+mg_cen_dot_map_five <- mg_cen_dot_map_five[!duplicated(mg_cen_dot_map_five$Census1940),
+                    .(clean_dot_code, Census1940, `Titles of 1940 Census`, dot_description)]
+
+merge(census_1940, mg_cen_dot_map_five, by.x = "occ", by.y = "Census1940")
