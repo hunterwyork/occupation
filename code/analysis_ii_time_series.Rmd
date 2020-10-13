@@ -1,0 +1,325 @@
+---
+title: "analysis_ii_time_series"
+author: "Hunter York"
+date: "10/10/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+
+
+
+options
+theme_set(theme_bw())
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    mean.w <- sum(x * w) / sum(w)
+    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+na.rm)
+}
+
+
+# #census_1940 <- readRDS("../inputs/usa_00005.rds")
+# census_1940 <- readstata13::read.dta13("../inputs/usa_00008.dta")
+# census_1940 <- data.table(census_1940)
+# #keep vars
+# census_1940 <- census_1940[,.(year,statefip, countyicp,metro,perwt, sex, age, school,educ, empstat,occ, ind,ind1950, classwkr, wkswork2, incwage)]
+# 
+# # subset
+# census_1940 <- census_1940[empstat == "employed" &
+#                              (school == "no, not in school"| as.numeric(as.character(age)) >=34) &
+#                              as.numeric(as.character(age)) %in% 25:64 &
+#                             wkswork2 %like% "40|48|50" &
+#                              incwage != 999998 &
+#                              incwage > 0]
+
+# #saveRDS(census_1940, "../inputs/usa_00008.rds")
+census_1940 <- readRDS( "../inputs/usa_00008.rds")
+
+# derive a 5-year age var
+census_1940[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                                " to ", 
+                                floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+# make occ var char
+census_1940[, occ := as.character(occ)]
+
+# 
+census_1940[nchar(occ) == 1, occ := paste0("00", occ)]
+census_1940[nchar(occ) == 2, occ := paste0("0", occ)]
+
+# make first dig var
+census_1940[, first_dig := substr(occ, 1,1)]
+
+# make map for first dig categories
+map <- data.table(first_dig = as.character(0:9), 
+                  occ_categ = c("Professional", "Clerical", "Service",
+                                "Agricultural, etc.", "Skilled", "Skilled",
+                                "Semiskilled", "Semiskilled", "Unskilled",
+                                "Unskilled"))
+census_1940 <- merge(census_1940, map, by = "first_dig")
+
+# merge census 1940 file on ind codes
+ind_codes <- read_xlsx("../ref/IND1940.xlsx") %>% data.table()
+ind_codes[, IND := as.numeric(IND)]
+census_1940 <- merge(census_1940, 
+                     ind_codes[!is.na(IND) & IND != 996], 
+                     by.x = "ind", by.y = "IND", all.x = T)
+
+# create log inc wage
+census_1940[, log_incwage := log(incwage + 1)]
+```
+
+# Time Trends: Decomposition of Variation in Log Earnings across 80 Years
+
+```{r}
+get_vars <- function(c.data, c.by_vars,c.by_vars_2, c.var_interest){
+  out_dt_1 <- c.data[,.(w_i_ss = weighted.var(get(c.var_interest), perwt) * .N,
+                        N = .N,
+                        k = max(.GRP)),
+                     by = c(c.by_vars, c.by_vars_2)]
+  out_2 <- c.data[,.(tot_ss=weighted.var(get(c.var_interest), perwt) * .N), by = c.by_vars_2]
+  out_dt_1 <- merge(out_dt_1, out_2, by = c.by_vars_2)
+  out_dt_1 <- out_dt_1[!is.na(tot_ss)& !is.na(w_i_ss) & !is.nan(tot_ss)& !is.nan(w_i_ss) & 
+                          !is.infinite(tot_ss)& !is.infinite(w_i_ss),
+                       .(avg_within_var = sum(w_i_ss),
+                         avg_total_var = mean(tot_ss),
+                         avg_between_var = mean(tot_ss) -sum(w_i_ss), 
+                         N = sum(N),
+                         k = length(unique(N[!is.na(w_i_ss)]))),
+                       by = c.by_vars_2]
+  return(out_dt_1)
+}
+
+#  create another function to loop over data and 
+#  calculate occ, ind, and occ + ind var
+
+dem_var_gettr <- function(c.dat2, c.by_vars_2){
+  occ_only <- get_vars(c.dat2,
+                       c.by_vars = c("occ"),
+                       c.by_vars_2 = c.by_vars_2,
+                       c.var_interest = "log_incwage")
+  occ_only[, grouping := "Occupation"]
+  ind_only <- get_vars(c.dat2,
+                       c.by_vars = c("ind"),
+                       c.by_vars_2 = c.by_vars_2,
+
+                       c.var_interest = "log_incwage")
+    ind_only[, grouping := "Industry"]
+
+  occ_ind <- get_vars(c.dat2,
+                      c.by_vars = c("occ", "ind"),
+                      c.by_vars_2 = c.by_vars_2,
+                      c.var_interest = "log_incwage")
+    occ_ind[, grouping := "Occ + Ind"]
+
+  
+  out_dt <- rbindlist(list(occ_only, ind_only, occ_ind ))
+  return(out_dt)
+}
+
+temp <- dem_var_gettr(census_1940, c.by_vars_2 = c("year"))
+
+
+plot_dt <- temp
+
+plot_dt[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt[, ms_bw := (avg_between_var/(k-1))]
+plot_dt[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt[, bw_wi_perc_ratio := between_perc/within_perc]
+
+# ggplot(plot_dt)+ 
+#   geom_line(aes(x = age_start, y = f_stat, color = grouping)) +
+#   facet_grid(urban~sex) +
+#   geom_hline(yintercept = 1, linetype = "dashed")
+
+# cast long
+plot_dt_long <- melt(plot_dt, id.vars = c("year",
+                                          "grouping"),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+gg1 <- ggplot(plot_dt_long[variable %like% "between_perc"]) +
+  geom_line(aes(x = year, y = value,
+                color = grouping, group = grouping))+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results using original OCC and IND categories") + 
+  ylim(0, .5)
+print(gg1)
+# 
+
+```
+
+# Now do it with a standardized industry variable and with standardized occupation variable
+
+This uses census-to-census crosswalks. ACS 2018 xwalk values seem to be off. (50 should be 51 or 52 for managers, for instance). https://usa.ipums.org/usa/volii/occ2018.shtml 
+
+
+
+```{r}
+# load in xwalk
+xwalk <- data.table(read_excel("../ref/Census_integrated_occ_crosswalks.xlsx"))
+xwalk_long <- melt(xwalk, id.vars = c("OCC1950", "Occupation category description"))
+setnames(xwalk_long, c("OCC1950", "OCC1950_desc", "year", "orig_occ"))
+xwalk_long[as.character(year) =="ACS 2000-02", year := "2000ACS"]
+xwalk_long[as.character(year)  == "ACS 2003-", year := "2018"]
+
+# copy 1950 vals to 1940 for nowxwalk_long
+xwalk_long[, year := as.character(year)]
+xwalk_long[year == 1950] %>% 
+  .[, year := 1940] %>% 
+  rbind(., xwalk_long) -> temp
+xwalk_long[, orig_occ := as.numeric(orig_occ)]
+census_1940[, occ := as.numeric(occ)]
+# merge on census
+census_1940 <- merge(census_1940, xwalk_long, by.y = c("year", "orig_occ"), by.x = c("year", "occ"), all.x = T)
+
+
+
+dem_var_gettr2 <- function(c.dat2, c.by_vars_2){
+  occ_only <- get_vars(c.dat2,
+                       c.by_vars = c("OCC1950"),
+                       c.by_vars_2 = c.by_vars_2,
+                       c.var_interest = "log_incwage")
+  occ_only[, grouping := "Occupation"]
+  ind_only <- get_vars(c.dat2,
+                       c.by_vars = c("ind1950"),
+                       c.by_vars_2 = c.by_vars_2,
+
+                       c.var_interest = "log_incwage")
+    ind_only[, grouping := "Industry"]
+
+  occ_ind <- get_vars(c.dat2,
+                      c.by_vars = c("OCC1950", "ind1950"),
+                      c.by_vars_2 = c.by_vars_2,
+                      c.var_interest = "log_incwage")
+    occ_ind[, grouping := "Occ + Ind"]
+
+  
+  out_dt <- rbindlist(list(occ_only, ind_only, occ_ind ))
+  return(out_dt)
+}
+
+temp <- dem_var_gettr2(census_1940, c.by_vars_2 = c("year"))
+
+
+plot_dt2 <- temp
+
+plot_dt2[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt2[, ms_bw := (avg_between_var/(k-1))]
+plot_dt2[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt2[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, bw_wi_perc_ratio := between_perc/within_perc]
+
+
+# cast long
+plot_dt2_long <- melt(plot_dt2, id.vars = c("year",
+                                          "grouping"),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+gg2 <- ggplot(plot_dt2_long[variable %like% "between_perc"]) +
+  geom_line(aes(x = year, y = value,
+                color = grouping, group = grouping))+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results using xwalked OCC and 1950IND"
+       ) + 
+  ylim(0, .5)
+
+library(gridExtra) 
+grid.arrange(gg1, gg2, nrow = 1)
+# 
+
+```
+
+## Tables of numbers of occ and ind code by decade
+
+```{r, output = 'asis'}
+census_1940[,.(occ = length(unique(occ)),
+               ind = length(unique(ind)),
+               OCC1950 = length(unique(OCC1950)),
+               ind1950 = length(unique(ind1950))), by = .(year)]
+```
+
+# Subanalyses by sex and age, by cohort
+
+```{r}
+temp <- dem_var_gettr2(census_1940, c.by_vars_2 = c("year", "sex"))
+
+
+plot_dt2 <- temp
+
+plot_dt2[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt2[, ms_bw := (avg_between_var/(k-1))]
+plot_dt2[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt2[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, bw_wi_perc_ratio := between_perc/within_perc]
+
+
+# cast long
+plot_dt2_long <- melt(plot_dt2, id.vars = c("year",
+                                            "sex",
+                                          "grouping"),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+ggplot(plot_dt2_long[variable %like% "between_perc" ]) +
+  geom_line(aes(x = year, y = value,
+                color = grouping, group = grouping))+
+  facet_wrap(~sex)+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results facetted by sex")
+```
+
+
+
+
+
