@@ -1,0 +1,585 @@
+---
+title: "analysis_iv"
+author: "Hunter York"
+date: "10/31/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+
+
+options
+theme_set(theme_bw())
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    mean.w <- sum(x * w) / sum(w)
+    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                           na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/usa_00010.dta")
+# acs <- acs[acs$empstat == "employed" &
+#                              (acs$school == "no, not in school"| as.numeric(as.character(acs$age)) >=34) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork2 %like% "40|48|50" &
+#                              acs$incwage != 999998 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+# #keep vars
+# acs <- acs[,.(race, hispan, year,statefip, countyicp,metro,perwt, sex, age, school,educ, empstat,occ,occ1950, ind,ind1950, classwkr, wkswork2, incwage)]
+# 
+# # subset
+
+
+#saveRDS(acs, "../inputs/usa_00010.rds")
+acs <- readRDS( "../inputs/usa_00010.rds")
+
+setnames(acs, c("occ1950", "ind1950"), c("origocc1950", "origind1950"))
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+# make occ var char
+acs[, occ := as.character(occ)]
+
+# 
+acs[nchar(occ) == 1, occ := paste0("00", occ)]
+acs[nchar(occ) == 2, occ := paste0("0", occ)]
+
+# make first dig var
+acs[, first_dig := substr(occ, 1,1)]
+
+# make map for first dig categories
+map <- data.table(first_dig = as.character(0:9), 
+                  occ_categ = c("Professional", "Clerical", "Service",
+                                "Agricultural, etc.", "Skilled", "Skilled",
+                                "Semiskilled", "Semiskilled", "Unskilled",
+                                "Unskilled"))
+acs <- merge(acs, map, by = "first_dig")
+
+# merge census 1940 file on ind codes
+ind_codes <- read_xlsx("../ref/IND1940.xlsx") %>% data.table()
+ind_codes[, IND := as.numeric(IND)]
+acs <- merge(acs, 
+             ind_codes[!is.na(IND) & IND != 996], 
+             by.x = "ind", by.y = "IND", all.x = T)
+
+# crosswalk to ppp
+ppp <- read_excel("../ref/CPI_U_RS.xlsx") %>% data.table
+ppp[1, year := 1940]
+ppp[1, cpi := 33]
+ppp[, year := as.character(year)]
+ppp[, xwalk_fac := cpi/369.8]
+acs <- merge(acs, ppp, by = "year")
+acs[, incwage := incwage/xwalk_fac]
+# create log inc wage
+acs[, log_incwage := log(incwage + 1)]
+
+# crosswalk to occsoc
+occ_soc <- fread("../ref/occ_occsoc_crosswalk_2000_onward_without_code_descriptions.csv")
+occ_soc[, seq := 1:nrow(occ_soc)]
+occ_soc <- melt(occ_soc, id.vars = c("Occupation title", "V1", "seq"))
+occ_soc[, pref := substr(variable, 1,4)]
+occ_soc[, soc := ifelse(variable %like% "SOC"|variable == "2018 Onward ACS/PRCS", 1,0)]
+occ_soc <- occ_soc[pref %in% c(2005, 2013, 2018)]
+occ_soc <- dcast(occ_soc, `Occupation title` + pref+seq~ soc, value.var = "value")
+setnames(occ_soc, c("soc_occ_title", "year", "seq", "occ", "OCCSOC"))
+occ_soc <- occ_soc[!is.na(occ), .(soc_occ_title, year, occ, OCCSOC)]
+occ_soc[year == 2005, year := 2009]
+
+# copy less granular 2009 categories to 2013 and 2018
+temp <- occ_soc[year == 2009 & !occ %in% unique(occ_soc[year == 2013, occ])]
+temp[, year := 2013]
+occ_soc <- rbind(occ_soc, temp)
+temp <- occ_soc[year == 2009 & !occ %in% unique(occ_soc[year == 2018, occ])]
+temp[, year := 2018]
+occ_soc <- rbind(occ_soc, temp)
+temp <- occ_soc[year == 2013 & !occ %in% unique(occ_soc[year == 2009, occ])]
+temp[, year := 2009]
+occ_soc <- rbind(occ_soc, temp)
+temp <- occ_soc[year == 2013 & !occ %in% unique(occ_soc[year == 2018, occ])]
+temp[, year := 2018]
+occ_soc <- rbind(occ_soc, temp)
+
+temp <- occ_soc[year == 2018 & !occ %in% unique(occ_soc[year == 2013, occ])]
+temp[, year := 2013]
+occ_soc <- rbind(occ_soc, temp)
+temp <- occ_soc[year == 2018 & !occ %in% unique(occ_soc[year == 2009, occ])]
+temp[, year := 2009]
+occ_soc <- rbind(occ_soc, temp)
+
+# merge on acs
+acs[, occ := as.numeric(occ)]
+occ_soc[, occ:= as.numeric(occ)]
+acs <- merge(acs, occ_soc, by = c("occ", "year"), all.x = T)
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+
+# reformate onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+
+occ_soc_x <- acs[OCCSOC %like% "X", .(year, OCCSOC)] %>% unique() # these are wildcard census vars
+setnames(occ_soc_x, "OCCSOC", "tempOCCSOC")
+
+#merge on wild cards one digit at a time
+for (i in 4:1){
+    acs[, newvar := str_sub(OCCSOC, 1, -1-i)]
+    occ_soc_x[, newvar := str_sub(tempOCCSOC, 1, -1-i)]
+    acs <- merge(acs, occ_soc_x[tempOCCSOC %like% paste0("[0-9]", paste0(rep("X", i), collapse = ""), "$")] ,
+                 by = c("newvar", "year"), all.x = T)
+    acs[!is.na(tempOCCSOC), OCCSOC := tempOCCSOC]
+    acs[, newvar := NULL]
+    acs[, tempOCCSOC := NULL]
+    occ_soc_x[, newvar := NULL]
+}
+
+# some things aren't being merged. Fix later
+#acs[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+# for all things that end in a 0, make an average of children
+acs[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)] -> fixes
+skills[, Standard.Error := as.numeric(Standard.Error)]
+temp <- skills[substr(OCCSOC,1,5) %in% substr(fixes[fixes %like% "0$"],1,5)]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,5), "0")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# do the same for ending in 99
+temp <- skills[substr(OCCSOC,1,4) %in% substr(fixes[fixes %like% "99$"],1,4)]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,4), "99")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# do the same for ending in XXXX
+temp <- skills[substr(OCCSOC,1,2) %in% substr(fixes[fixes %like% "XXXX$"],1,2)& !substr(OCCSOC,1,2) %like% "X"]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,2), "XXXX")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# do the same for ending in XXX
+temp <- skills[substr(OCCSOC,1,3) %in% substr(fixes[fixes %like% "XXX$"],1,3) & !substr(OCCSOC,1,3) %like% "X"]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,3), "XXX")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# do the same for ending in XX
+temp <- skills[substr(OCCSOC,1,4) %in% substr(fixes[fixes %like% "XX$"],1,4)& !substr(OCCSOC,1,4) %like% "X"]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,4), "XX")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# do the same for ending in X
+temp <- skills[substr(OCCSOC,1,5) %in% substr(fixes[fixes %like% "X$"],1,5)& !substr(OCCSOC,1,5) %like% "X"]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,5), "X")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+# for all things that end in a 0, make an average of children
+temp <- skills[substr(OCCSOC,1,5) %in% substr(fixes[fixes %like% "X$"],1,5)]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,5), "0")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+
+#back fill missing skills
+for(i in c(2009, 2013, 2018)){
+    for( ii in c(2009, 2013, 2018)){
+        if(i != ii){
+            temp <- skills[year == i & !OCCSOC %in% unique(skills[year == ii, OCCSOC])]
+            temp[, year := ii]
+            skills <- rbind(skills, temp)
+        }
+    }
+}
+
+#try one last way to fill in missing vals
+# for all things that end in a 0, make an average of children
+temp <- skills[substr(OCCSOC,1,5) %in% substr(fixes[fixes %like% "X$"],1,5)]
+temp[, OCCSOC := paste0(substr(OCCSOC,1,5), "0")]
+temp <- temp[,.(Data.Value = mean(Data.Value),
+                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+skills <- rbind(temp, skills, fill = T)
+
+#okay now one real final last try to fill in missing vars
+acs[!OCCSOC %in% unique(skills$OCCSOC) & !is.na(OCCSOC), unique(OCCSOC)] -> fixes
+
+for(c.occsoc in fixes){
+    keeper <- "continue"
+    for(i in 1:4){
+        print(c.occsoc)
+        print(i)
+        if(keeper == "continue"){
+            fixes_substr <- str_sub(c.occsoc,1,-1-i)
+            candidates <- unique(skills$OCCSOC)
+            matches <- candidates[str_sub(candidates, 1, -1-i) == fixes_substr]
+            if(length(matches > 1)){
+                temp <- skills[OCCSOC %in% matches]
+                temp[, OCCSOC := c.occsoc]
+                temp <- temp[,.(Data.Value = mean(Data.Value),
+                                Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+                skills <- rbind(temp, skills, fill = T)
+                keeper <- "stop"
+            }
+        }
+    }
+}
+
+#create a map of all children
+parents <- data.table(parents = unique(skills$OCCSOC)[unique(skills$OCCSOC) %like% "X$|0$"])
+parents_out <- data.table()
+for(c.parent in parents$parents){
+    substr_parent <- gsub("0$|00$|000$|0000$|X$|XX$|XXX$|XXXX$", "", c.parent, perl = TRUE)
+    children <- data.table(parents = c.parent, children = unique(skills$OCCSOC)[unique(skills$OCCSOC) %like% paste0("^", substr_parent)])
+    temp <- merge(parents, children, allow.cartesian = T)
+    if(nrow(temp)>1){
+        parents_out <- rbind(parents_out, temp, fill = T)
+    }
+}
+parents_out[, sub :=  gsub("0$|00$|000$|0000$|X$|XX$|XXX$|XXXX$", "", parents, perl = TRUE)]
+parents_out[, level := 6-nchar(sub)]
+
+# see how many children occsocs aren't in every year
+acs[,.(year, OCCSOC)] %>% unique -> all_children
+
+# get least common set
+all_children[year == 2009, unique(OCCSOC)][all_children[year == 2009, unique(OCCSOC)] %in%
+                                               all_children[year == 2013, unique(OCCSOC)] & 
+                                               all_children[year == 2009, unique(OCCSOC)] %in% 
+                                               all_children[year == 2018, unique(OCCSOC)]] -> common_set
+
+children_fixes <- parents_out[!children %in% common_set]
+children_fixes[,N := .N, by = .(children)]
+children_fixes[,maxN := max(N), by = .(children)]
+children_fixes[,maxlevel := max(level), by = .(children)]
+
+children_fixes <- children_fixes[ N == 1 | level == maxlevel]
+
+children_fixes <- children_fixes[!duplicated(children_fixes$children)]
+    
+acs <- merge(acs, children_fixes[,.(parents, children)], 
+             by.x = "OCCSOC", by.y = "children", all.x = T)
+acs[!is.na(parents), OCCSOC := parents]
+
+#standardize by percent
+skills <- skills[OCCSOC %in% unique(acs$OCCSOC)]
+
+skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, year, Scale.ID)]
+
+
+
+```
+
+# Examine how the import of skills has changed over time
+
+This analysis uses the ONET 2016 skills file in conjunction with the ONET/DOT crosswalks. Data are the ACS 5-year samples from 2018, 2013, and 2009 (a slight overlap). 
+
+## First, check how the skills rating themselves change over time, irrespective of census
+
+```{r}
+# make a skills dataset that has a few interesting variables
+skills_sum <- skills[Scale.ID == "LV",
+                     .(average_value_skills = mean(Data.Value, na.rm = T)), by = .(year, OCCSOC)]
+skills_sum[, year := as.character(year)]
+
+# See which jobs are shared between all years
+skills_sum[, keep := length(unique(year)) == 3, by = .(OCCSOC)]
+
+skills_sum[, keep := T]
+
+# compute average score by year
+skills_by_year <- skills[Scale.ID == "LV",
+                     .(average_value_skills = mean(Data.Value, na.rm = T)), by = .(year)]
+skills_by_year
+
+# average across years
+# REMOVE THIS IF YOU WANT YEAR SPECIFIC SKILLS RATINGS
+skills[,Data.Value := mean(Data.Value), by = .(Element.Name, Scale.ID, OCCSOC)]
+```
+
+We notice that there's a decrease in the average skill level between 2009 and 2013, even after using percentil standardizations. 
+
+## Do a quick PCA to see how skills vary with respect to each other
+
+```{r}
+
+
+
+# cast wide and do factor analysis
+skills <- skills[OCCSOC %in% unique(acs$OCCSOC),
+                 .(Data.Value = mean(Data.Value)), by = .(Element.Name, Scale.ID, year, OCCSOC)]
+
+
+skills_wide <- dcast(skills[Scale.ID == "LV"], OCCSOC  + year ~Element.Name, value.var = "Data.Value")
+res.pca <- prcomp(skills_wide[,3:35], scale = TRUE, center = T)
+
+fviz_pca_var(res.pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE ,
+             select.var = list(contrib = 15)    # Avoid text overlapping
+)
+fviz_pca_var(res.pca,
+             axes = c(3,4),
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,# Avoid text overlapping,
+             select.var = list(contrib = 15)
+)
+
+```
+
+## See how mean skills change across survey year using ACS data
+
+```{r}
+acs <- merge(acs, skills_sum, by = c("year", "OCCSOC"), all.x = T)
+
+skills_overview <- acs[,.(mean_skills = weighted.mean(average_value_skills, w = perwt, na.rm = T)), by = .(year, age_cat, sex)]
+
+skills_overview[year > 2009, cohort := as.numeric(year) - as.numeric(substr(age_cat,1,2))]
+skills_overview[year == 2009, cohort := as.numeric(year)-1 - as.numeric(substr(age_cat,1,2))]
+
+ggplot(skills_overview) + 
+    geom_line(aes(x = year, y = mean_skills, color = age_cat, group = age_cat)) + 
+    facet_wrap(~sex)
+
+ggplot(skills_overview) + 
+    geom_line(aes(x = year, y = mean_skills, color = as.factor(cohort), group = as.factor(cohort))) + 
+    facet_wrap(~sex)
+```
+
+## Recalculate skills by year to capture more interesting variables, like LV1 and LV2, Programming, etc
+
+```{r}
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, pc1 := predict(res.pca, newdata = .SD)[,1], .SDcols = names(skills_sum)]
+skills_sum[, pc2 := predict(res.pca, newdata = .SD)[,2], .SDcols = names(skills_sum)]
+skills_sum[, pc3 := predict(res.pca, newdata = .SD)[,3], .SDcols = names(skills_sum)]
+skills_sum[, pc4 := predict(res.pca, newdata = .SD)[,4], .SDcols = names(skills_sum)]
+
+skills_sum[, programming := Programming]
+skills_sum[, tech_skills := Programming + `Complex Problem Solving` +
+               `Mathematics` + Programming + Science + `Systems Analysis` + 
+               Troubleshooting]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)]
+
+skills_sum[, year := as.character(year)]
+
+# See which jobs are shared between all years
+skills_sum[, keep := length(unique(year)) == 3, by = .(OCCSOC)]
+
+# compute average score by year
+skills_by_year <- skills_sum[keep == T,.(average = mean(average_value_skills),
+                                         pc1 = mean(pc1),
+                                         pc2 = mean(pc2),
+                                         pc3 = mean(pc3),
+                                         pc4 = mean(pc4),
+                                         programming = mean(programming),
+                                         tech_skills = mean(tech_skills)), by = year]
+skills_by_year
+```
+
+
+## See how mean skills change across survey year
+
+```{r}
+# average across years
+# REMOVE THIS IF YOU WANT YEAR SPECIFIC SKILLS RATINGS
+# skills_sum <- skills_sum[year == 2018,.(pc1 = mean(pc1), 
+#                             pc2 = mean(pc2),
+#                             programming = mean(programming)), by = "OCCSOC"]
+
+acs <- merge(acs, skills_sum[,.(OCCSOC, year, pc1, pc2,pc3, pc4, programming, tech_skills)], by = c( "OCCSOC", "year"), all.x = T)
+
+# only retain jobs that are in common between all three years
+
+skills_overview2 <- acs[OCCSOC %in% acs[!is.na(pc1) & year == 2018, unique(OCCSOC)],.(pc1 = weighted.mean(pc1,w = perwt, na.rm = T),
+                                                                                      pc2 = weighted.mean(pc2,w = perwt,  na.rm = T), 
+                                                                                      pc3 = weighted.mean(pc3,w = perwt,  na.rm = T),
+                                                                                      pc4 = weighted.mean(pc4,w = perwt,  na.rm = T),
+                                                                                      programming = weighted.mean(programming,w = perwt,  na.rm = T),
+                                                                                      tech_skills = weighted.mean(tech_skills, w = perwt, na.rm = T),
+                                                                                      average_value_skills = weighted.mean(average_value_skills, w = perwt, na.rm = T)), by = .(year, age_cat, sex)]
+
+skills_overview2_melt <- melt(skills_overview2, id.vars = c("year", "age_cat", "sex"))
+
+skills_overview2_melt[year > 2009, cohort := as.numeric(year) - as.numeric(substr(age_cat,1,2))]
+skills_overview2_melt[year == 2009, cohort := as.numeric(year)-1 - as.numeric(substr(age_cat,1,2))]
+
+
+ggplot(skills_overview2_melt) + 
+    geom_line(aes(x = year, y = value, color = age_cat, group = age_cat)) + 
+    facet_grid(variable~sex, scales = "free") + 
+    scale_color_viridis_d()
+
+ggplot(skills_overview2_melt) + 
+    geom_line(aes(x = year, y = value, color = as.factor(cohort), group = as.factor(cohort))) + 
+    facet_grid(variable~sex, scales = "free") + 
+    scale_color_viridis_d()
+```
+
+## See how changes in skill level are spread over occupational grouping
+
+```{r}
+skills_overview3 <- acs[OCCSOC %in% acs[!is.na(pc1) & year == 2018, unique(OCCSOC)],.(pc1 = weighted.mean(pc1,w = perwt, na.rm = T),
+                                                                                      pc2 = weighted.mean(pc2,w = perwt,  na.rm = T), 
+                                                                                      pc3 = weighted.mean(pc3,w = perwt,  na.rm = T),
+                                                                                      pc4 = weighted.mean(pc4,w = perwt,  na.rm = T),
+                                                                                      programming = weighted.mean(programming,w = perwt,  na.rm = T),
+                                                                                      tech_skills = weighted.mean(tech_skills, w = perwt, na.rm = T), average_value_skills = weighted.mean(average_value_skills, w = perwt, na.rm = T)), by = .(year, age_cat, sex, occ_categ)]
+
+skills_overview3_melt <- melt(skills_overview3, id.vars = c("year", "age_cat", "sex" ,"occ_categ"))
+skills_overview3_melt[year > 2009, cohort := as.numeric(year) - as.numeric(substr(age_cat,1,2))]
+skills_overview3_melt[year == 2009, cohort := as.numeric(year)-1 - as.numeric(substr(age_cat,1,2))]
+
+
+ggplot(skills_overview3_melt[variable %like% "pc1|progr|tech|averag" &
+                                 occ_categ %in% unique(skills_overview3_melt$occ_categ)[1:3]]) + 
+    geom_line(aes(x = year, y = value, color = as.factor(cohort), group = as.factor(cohort))) + 
+    facet_grid( variable ~occ_categ+sex, scales = "free") + 
+    scale_color_viridis_d()
+
+ggplot(skills_overview3_melt[variable %like% "pc1|progr|tech|averag" &
+                                 occ_categ %in% unique(skills_overview3_melt$occ_categ)[4:7]]) + 
+    geom_line(aes(x = year, y = value, color = as.factor(cohort), group = as.factor(cohort))) + 
+    facet_grid( variable ~occ_categ+sex, scales = "free") + 
+    scale_color_viridis_d() 
+```
+
+The fact that age groups vary consistently across ACS years indicates that year changes are artifacts of the data. b/w cohort changes are interesting, however.
+
+# Examine how class of worker, industry, and ed affect inequality
+
+```{r, echo = F}
+rm(list = ls())
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+
+
+
+options
+theme_set(theme_bw())
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    mean.w <- sum(x * w) / sum(w)
+    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+na.rm)
+}
+
+
+# #census_1940 <- readRDS("../inputs/usa_00005.rds")
+# census_1940 <- readstata13::read.dta13("../inputs/usa_00009.dta")
+# census_1940 <- data.table(census_1940)
+# #keep vars
+# census_1940 <- census_1940[,.(race, hispan, year,statefip, countyicp,metro,perwt, sex, age, school,educ, empstat,occ,occ1950, ind,ind1950, classwkr, wkswork2, incwage)]
+# 
+# # subset
+# census_1940 <- census_1940[empstat == "employed" &
+#                              (school == "no, not in school"| as.numeric(as.character(age)) >=34) &
+#                              as.numeric(as.character(age)) %in% 25:64 &
+#                             wkswork2 %like% "40|48|50" &
+#                              incwage != 999998 &
+#                              incwage > 0]
+
+# #saveRDS(census_1940, "../inputs/usa_00009.rds")
+census_1940 <- readRDS( "../inputs/usa_00009.rds")
+
+setnames(census_1940, c("occ1950", "ind1950"), c("origocc1950", "origind1950"))
+# derive a 5-year age var
+census_1940[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                                " to ", 
+                                floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+# make occ var char
+census_1940[, occ := as.character(occ)]
+
+# 
+census_1940[nchar(occ) == 1, occ := paste0("00", occ)]
+census_1940[nchar(occ) == 2, occ := paste0("0", occ)]
+
+# make first dig var
+census_1940[, first_dig := substr(occ, 1,1)]
+
+# make map for first dig categories
+map <- data.table(first_dig = as.character(0:9), 
+                  occ_categ = c("Professional", "Clerical", "Service",
+                                "Agricultural, etc.", "Skilled", "Skilled",
+                                "Semiskilled", "Semiskilled", "Unskilled",
+                                "Unskilled"))
+census_1940 <- merge(census_1940, map, by = "first_dig")
+
+# merge census 1940 file on ind codes
+ind_codes <- read_xlsx("../ref/IND1940.xlsx") %>% data.table()
+ind_codes[, IND := as.numeric(IND)]
+census_1940 <- merge(census_1940, 
+                     ind_codes[!is.na(IND) & IND != 996], 
+                     by.x = "ind", by.y = "IND", all.x = T)
+
+# crosswalk to ppp
+ppp <- read_excel("../ref/CPI_U_RS.xlsx") %>% data.table
+ppp[1, year := 1940]
+ppp[1, cpi := 32]
+ppp[, year := as.character(year)]
+ppp[, xwalk_fac := cpi/369.8]
+census_1940 <- merge(census_1940, ppp, by = "year")
+census_1940[, incwage := incwage/xwalk_fac]
+# create log inc wage
+census_1940[, log_incwage := log(incwage + 1)]
+```
+
+```{r}
+
+```

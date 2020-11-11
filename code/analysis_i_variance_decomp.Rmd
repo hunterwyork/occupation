@@ -14,7 +14,6 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(DescTools)
 library(data.table)
 library(ggplot2)
 library(dplyr)
@@ -32,6 +31,18 @@ theme_set(theme_bw())
 # load the data
 setwd("/Users/hyork/Documents/projects/occupation/code")
 
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    mean.w <- sum(x * w) / sum(w)
+    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+na.rm)
+}
 
 
 # #census_1940 <- readRDS("../inputs/usa_00005.rds")
@@ -352,4 +363,95 @@ ggplot(plot_dt2[age_start %in% c(25, 35,45,55)])+
 
 ```
 
+
+```{r}
+get_vars <- function(c.data, c.by_vars,c.by_vars_2, c.var_interest){
+  out_dt_1 <- c.data[,.(w_i_ss = weighted.var(get(c.var_interest), perwt) * .N,
+                        N = .N,
+                        k = max(.GRP)),
+                     by = c(c.by_vars, c.by_vars_2)]
+  out_dt_1[N==1, w_i_ss := 0]
+  out_2 <- c.data[,.(tot_ss=weighted.var(get(c.var_interest), perwt) * .N), by = c.by_vars_2]
+  out_dt_1 <- merge(out_dt_1, out_2, by = c.by_vars_2)
+  out_dt_1 <- out_dt_1[!is.na(tot_ss)& !is.na(w_i_ss) & !is.nan(tot_ss)& !is.nan(w_i_ss) & 
+                          !is.infinite(tot_ss)& !is.infinite(w_i_ss),
+                       .(avg_within_var = sum(w_i_ss),
+                         avg_total_var = mean(tot_ss),
+                         avg_between_var = mean(tot_ss) -sum(w_i_ss), 
+                         N = sum(N),
+                         k = length(unique(N[!is.na(w_i_ss)]))),
+                       by = c.by_vars_2]
+  return(out_dt_1)
+}
+
+#  create another function to loop over data and 
+#  calculate occ, ind, and occ + ind var
+
+dem_var_gettr <- function(c.dat2, c.by_vars_2){
+  occ_only <- get_vars(c.dat2,
+                       c.by_vars = c("occ"),
+                       c.by_vars_2 = c.by_vars_2,
+                       c.var_interest = "log_incwage")
+  occ_only[, grouping := "Occupation"]
+  ind_only <- get_vars(c.dat2,
+                       c.by_vars = c("ind"),
+                       c.by_vars_2 = c.by_vars_2,
+
+                       c.var_interest = "log_incwage")
+    ind_only[, grouping := "Industry"]
+
+  occ_ind <- get_vars(c.dat2,
+                      c.by_vars = c("occ", "ind"),
+                      c.by_vars_2 = c.by_vars_2,
+                      c.var_interest = "log_incwage")
+    occ_ind[, grouping := "Occ + Ind"]
+
+  
+  out_dt <- rbindlist(list(occ_only, ind_only, occ_ind ))
+  return(out_dt)
+}
+
+census_1940[, perwt := 1]
+dem_var_gettr(census_1940, c.by_vars_2 = c("statefip", "countyicp", "sex", "age_cat")) -> plot_dt3
+
+
+plot_dt3[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+
+
+
+plot_dt3[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt3 <- plot_dt3[!is.nan(between_perc) & !is.na(between_perc) & !is.infinite(between_perc),.(between_perc = weighted.mean(between_perc, N)), by = .(sex, grouping, age_cat)]
+
+ggplot(plot_dt3)+ 
+  geom_line(aes(x = age_cat, y = between_perc, color = grouping, group = grouping)) +
+  facet_wrap(~sex) +
+    labs(x = "Age", y = "Percent Total Variance Explained, stratified by county") +
+  ylim(.2, .7)
+
+```
+
+
+```{r}
+census_1940[, perwt := 1]
+dem_var_gettr(census_1940, c.by_vars_2 = c( "sex", "age_cat")) -> plot_dt3
+
+
+plot_dt3[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+
+
+
+plot_dt3[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt3 <- plot_dt3[!is.nan(between_perc) & !is.na(between_perc) & !is.infinite(between_perc),.(between_perc = weighted.mean(between_perc, N)), by = .(sex, grouping, age_cat)]
+
+ggplot(plot_dt3)+ 
+  geom_line(aes(x = age_cat, y = between_perc, color = grouping, group = grouping)) +
+  facet_wrap(~sex) +
+    labs(x = "Age", y = "Percent Total Variance Explained, not stratified by county")+
+  ylim(.2, .7)
+
+```
 

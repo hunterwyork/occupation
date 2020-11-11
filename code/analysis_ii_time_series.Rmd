@@ -40,10 +40,10 @@ na.rm)
 
 
 # #census_1940 <- readRDS("../inputs/usa_00005.rds")
-# census_1940 <- readstata13::read.dta13("../inputs/usa_00008.dta")
+# census_1940 <- readstata13::read.dta13("../inputs/usa_00009.dta")
 # census_1940 <- data.table(census_1940)
 # #keep vars
-# census_1940 <- census_1940[,.(year,statefip, countyicp,metro,perwt, sex, age, school,educ, empstat,occ, ind,ind1950, classwkr, wkswork2, incwage)]
+# census_1940 <- census_1940[,.(race, hispan, year,statefip, countyicp,metro,perwt, sex, age, school,educ, empstat,occ,occ1950, ind,ind1950, classwkr, wkswork2, incwage)]
 # 
 # # subset
 # census_1940 <- census_1940[empstat == "employed" &
@@ -53,9 +53,10 @@ na.rm)
 #                              incwage != 999998 &
 #                              incwage > 0]
 
-# #saveRDS(census_1940, "../inputs/usa_00008.rds")
-census_1940 <- readRDS( "../inputs/usa_00008.rds")
+# #saveRDS(census_1940, "../inputs/usa_00009.rds")
+census_1940 <- readRDS( "../inputs/usa_00009.rds")
 
+setnames(census_1940, c("occ1950", "ind1950"), c("origocc1950", "origind1950"))
 # derive a 5-year age var
 census_1940[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
                                 " to ", 
@@ -208,19 +209,19 @@ census_1940 <- merge(census_1940, xwalk_long, by.y = c("year", "orig_occ"), by.x
 
 dem_var_gettr2 <- function(c.dat2, c.by_vars_2){
   occ_only <- get_vars(c.dat2,
-                       c.by_vars = c("OCC1950"),
+                       c.by_vars = c("origocc1950"),
                        c.by_vars_2 = c.by_vars_2,
                        c.var_interest = "log_incwage")
   occ_only[, grouping := "Occupation"]
   ind_only <- get_vars(c.dat2,
-                       c.by_vars = c("ind1950"),
+                       c.by_vars = c("origind1950"),
                        c.by_vars_2 = c.by_vars_2,
 
                        c.var_interest = "log_incwage")
     ind_only[, grouping := "Industry"]
 
   occ_ind <- get_vars(c.dat2,
-                      c.by_vars = c("OCC1950", "ind1950"),
+                      c.by_vars = c("origocc1950", "origind1950"),
                       c.by_vars_2 = c.by_vars_2,
                       c.var_interest = "log_incwage")
     occ_ind[, grouping := "Occ + Ind"]
@@ -276,11 +277,12 @@ grid.arrange(gg1, gg2, nrow = 1)
 ```{r, output = 'asis'}
 census_1940[,.(occ = length(unique(occ)),
                ind = length(unique(ind)),
-               OCC1950 = length(unique(OCC1950)),
-               ind1950 = length(unique(ind1950))), by = .(year)]
+               xwalk_occ_1950 = length(unique(OCC1950)),
+               census_ind_1950 = length(unique(origind1950)),
+               census_occ_1950 = length(unique(origocc1950))), by = .(year)]
 ```
 
-# Subanalyses by sex and age, by cohort
+# Subanalyses by sex 
 
 ```{r}
 temp <- dem_var_gettr2(census_1940, c.by_vars_2 = c("year", "sex"))
@@ -311,15 +313,242 @@ plot_dt2_long <- melt(plot_dt2, id.vars = c("year",
                                       "ms_wi",
                                       "ms_bw"))
 
-ggplot(plot_dt2_long[variable %like% "between_perc" ]) +
+gg3 <- ggplot(plot_dt2_long[variable %like% "between_perc" ]) +
   geom_line(aes(x = year, y = value,
                 color = grouping, group = grouping))+
   facet_wrap(~sex)+
   labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
        title = "Results facetted by sex")
+
+print(gg3)
+
+
+```
+
+```{r}
+temp <- dem_var_gettr2(census_1940[race %like% "white|black"], c.by_vars_2 = c("year", "sex", "race"))
+
+
+plot_dt2 <- temp
+
+plot_dt2[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt2[, ms_bw := (avg_between_var/(k-1))]
+plot_dt2[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt2[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, bw_wi_perc_ratio := between_perc/within_perc]
+
+
+# cast long
+plot_dt3_long <- melt(plot_dt2, id.vars = c("year",
+                                            "sex",
+                                          "grouping",
+                                          "race"),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+ggplot(plot_dt3_long[variable %like% "between_perc" ]) +
+  geom_line(aes(x = year, y = value,
+                color = grouping, group = grouping))+
+  facet_wrap(race~sex)+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results facetted by race & sex")
 ```
 
 
+## Explore the extent to which changes in job bins affects results
+
+### Subset to the least common denominator for all years
+
+```{r}
+common_occ <- Reduce(intersect, list(unique(census_1940[year == 1940, origocc1950]),
+                       unique(census_1940[year == 1960, origocc1950]),
+                       unique(census_1940[year == 1980, origocc1950]),
+                       unique(census_1940[year == 2000, origocc1950]),
+                       unique(census_1940[year == 2018, origocc1950])))
+
+common_ind <- Reduce(intersect, list(unique(census_1940[year == 1940, origind1950]),
+                       unique(census_1940[year == 1960, origind1950]),
+                       unique(census_1940[year == 1980, origind1950]),
+                       unique(census_1940[year == 2000, origind1950]),
+                       unique(census_1940[year == 2018, origind1950])))
 
 
+temp <- dem_var_gettr2(census_1940[origocc1950 %in% common_occ & 
+                                     origind1950 %in% common_ind], c.by_vars_2 = c("year", "sex"))
 
+
+plot_dt2 <- temp
+
+plot_dt2[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt2[, ms_bw := (avg_between_var/(k-1))]
+plot_dt2[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt2[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, bw_wi_perc_ratio := between_perc/within_perc]
+
+
+# cast long
+plot_dt3_long <- melt(plot_dt2, id.vars = c("year",
+                                            "sex",
+                                          "grouping"
+                                          ),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+gg4 <- ggplot(plot_dt3_long[variable %like% "between_perc" ]) +
+  geom_line(aes(x = year, y = value,
+                color = grouping, group = grouping))+
+  facet_wrap(~sex)+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results using only shared occ + ind groups")
+
+```
+
+### Original (1950 Standard Occupation Codings, all jobs)
+
+```{r, echo = F}
+print(gg3)
+```
+
+
+### Subset (1950 Standard Occupation Codings, common jobs to all years)
+
+```{r, echo = F}
+print(gg4)
+```
+
+
+## Visualize Cohort Effects, using data with common jobs only
+
+```{r}
+temp <- dem_var_gettr2(census_1940[origocc1950 %in% common_occ & 
+                                     origind1950 %in% common_ind], c.by_vars_2 = c("year", "sex", "age_cat"))
+
+
+plot_dt2 <- temp
+
+plot_dt2[, f_stat := (avg_between_var/(k-1))/((avg_within_var)/(N-k))]
+plot_dt2[, ms_bw := (avg_between_var/(k-1))]
+plot_dt2[, ms_wi := (avg_within_var/(N-k))]
+
+plot_dt2[, within_perc :=
+          avg_within_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, between_perc :=
+          avg_between_var/
+          (avg_within_var+avg_between_var)]
+plot_dt2[, bw_wi_perc_ratio := between_perc/within_perc]
+
+
+# cast long
+plot_dt3_long <- melt(plot_dt2, id.vars = c("year",
+                                            "sex",
+                                          "grouping",
+                                          "age_cat"),
+                     measure.vars = c("within_perc",
+                                      "between_perc",
+                                      "bw_wi_perc_ratio",
+                                      "ms_wi",
+                                      "ms_bw"))
+
+plot_dt3_long[, birth_cohort :=  round(((round(as.numeric(as.character(year))/10) * 10) - as.numeric(substr(age_cat,1,2)))/10) * 10]
+
+ggplot(plot_dt3_long[variable %like% "between_perc" & birth_cohort %in% seq(1800,2000,20)]) +
+  geom_line(aes(x = as.numeric(substr(age_cat,1,2)), y = value,
+                color = grouping, group = grouping))+
+    geom_point(aes(x = as.numeric(substr(age_cat,1,2)), y = value,
+                color = grouping, group = grouping))+
+  facet_grid(birth_cohort~sex)+
+  labs(x = "Year", y = "Percent Total Variance Explained\nBy Between-Group Variation",
+       title = "Results facetted by birth cohort & sex")
+```
+
+# Briefly explore composition of labor market
+
+This uses the first prefix of the occ codes
+
+```{r}
+census_1940[,sum_perwt := (sum(perwt)), by = .(year, sex)]
+occ_categ <- census_1940[,.(occ_categ_prev = (sum(perwt))/mean(sum_perwt)), by = .(year, sex, occ_categ)]
+
+ggplot(occ_categ) + 
+  geom_bar(aes(x = year,y=occ_categ_prev, fill = occ_categ),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Occupation Categories (First Digit) (1950 Standard) by Year, Males")
+
+# calculate top 10 industries and occs by year
+ind_categ <- census_1940[,.(ind_categ_prev = (sum(perwt))/mean(sum_perwt)), by = .(year, sex, origind1950)]
+ind_categ[, rank := frankv(ind_categ_prev, order = -1), by = .(year, sex)]
+top_10 <- ind_categ[rank %in% 1:5 & sex == "male", unique(origind1950)]
+
+ggplot(ind_categ[origind1950 %in%  ind_categ[rank %in% 1:5 & sex == "male", unique(origind1950)] & sex == "male"]) + 
+  geom_bar(aes(x = year,y=ind_categ_prev, fill = origind1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Industries (1950 Standard) by Year, Males")
+
+ggplot(ind_categ[origind1950 %in%  ind_categ[rank %in% 1:5 & sex == "female", unique(origind1950)] & sex == "female"]) + 
+  geom_bar(aes(x = year,y=ind_categ_prev, fill = origind1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Industries (1950 Standard) by Year, Females")
+
+
+# calculate top 10 occupations and occs by year
+occ_categ <- census_1940[,.(occ_prev = (sum(perwt))/mean(sum_perwt)), by = .(year, sex, origocc1950)]
+occ_categ[, rank := frankv(occ_prev, order = -1), by = .(year, sex)]
+top_10 <- occ_categ[rank %in% 1:5 & sex == "male", unique(origocc1950)]
+
+ggplot(occ_categ[origocc1950 %in%  occ_categ[rank %in% 1:5 & sex == "male", unique(origocc1950)] & sex == "male"]) + 
+  geom_bar(aes(x = year,y=occ_prev, fill = origocc1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Occupations (1950 Standard) by Year, Males")
+
+ggplot(occ_categ[origocc1950 %in%  occ_categ[rank %in% 1:5 & sex == "female", unique(origocc1950)] & sex == "female"]) + 
+  geom_bar(aes(x = year,y=occ_prev, fill = origocc1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Occupations (1950 Standard) by Year, Females")
+
+
+```
+
+### Excluding "NEC" designations
+
+```{r}
+# calculate top 10 occupations and occs by year
+occ_categ <- census_1940[!origocc1950 %like% "n.e.c.|nec|NEC|N.E.C.",.(occ_prev = (sum(perwt))/mean(sum_perwt)), by = .(year, sex, origocc1950)]
+occ_categ[, rank := frankv(occ_prev, order = -1), by = .(year, sex)]
+top_10 <- occ_categ[rank %in% 1:5 & sex == "male", unique(origocc1950)]
+
+ggplot(occ_categ[origocc1950 %in%  occ_categ[rank %in% 1:4 & sex == "male", unique(origocc1950)] & sex == "male"]) + 
+  geom_bar(aes(x = year,y=occ_prev, fill = origocc1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 4 Occupations (1950 Standard) by Year, Males")
+
+ggplot(occ_categ[origocc1950 %in%  occ_categ[rank %in% 1:5 & sex == "female", unique(origocc1950)] & sex == "female"]) + 
+  geom_bar(aes(x = year,y=occ_prev, fill = origocc1950),
+              stat = "identity", position = "stack") +
+  facet_grid(~sex) + scale_fill_brewer(palette = "Paired") + 
+  ggtitle("Top 5 Occupations (1950 Standard) by Year, Females")
+```
