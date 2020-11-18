@@ -1,0 +1,10 @@
+---
+title: "analysis_v"
+author: "Hunter York"
+date: "11/18/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
