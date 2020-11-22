@@ -6,5 +6,537 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+
+
+options
+theme_set(theme_bw())
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  sum.w2 <- sum(w^2)
+  mean.w <- sum(x * w) / sum(w)
+  (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                       na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/cps_00004.dta")
+# acs2 <- fread("../inputs/cps_00005.csv")
+# acs[,-tolower(c("OCC2010", "OCC1990", "OCC", "OCCLY", "OCC90LY", "OCC10LY"))]
+# acs <- cbind(acs, acs2[,.(OCC2010, OCC1990, OCC, OCCLY, OCC90LY, OCC10LY)])
+# acs <- acs[acs$empstat == "at work" &
+#                              (acs$schlcoll %like% "does not attend|niu"| is.na(acs$schlcoll)) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork1 >= 30 &
+#                              acs$incwage != 99999999 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+# #keep vars
+# acs <- acs[,.(race, hispan, year,asecwt, sex, age, schlcoll,educ, empstat,OCC,OCC2010,OCC1990, ind,ind1990, classwkr, ahrsworkt,wkswork1, uhrsworkly,classwly,workly,OCCLY,indly,OCC90LY,ind90ly,OCC10LY, incwage)]
+
+# subset
+
+
+#saveRDS(acs, "../inputs/cps_00004.rds")
+acs <- readRDS( "../inputs/cps_00004.rds")
+
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+# make first dig var
+#acs[, first_dig := substr(occ, 1,1)]
+
+# make map for first dig categories
+# map <- data.table(first_dig = as.character(0:9), 
+#                   occ_categ = c("Professional", "Clerical", "Service",
+#                                 "Agricultural, etc.", "Skilled", "Skilled",
+#                                 "Semiskilled", "Semiskilled", "Unskilled",
+#                                 "Unskilled"))
+# acs <- merge(acs, map, by = "first_dig")
+
+# # crosswalk to ppp
+# ppp <- read_excel("../ref/CPI_U_RS.xlsx") %>% data.table
+# ppp[1, year := 1940]
+# ppp[1, cpi := 33]
+# ppp[, year := as.character(year)]
+# ppp[, xwalk_fac := cpi/369.8]
+# acs <- merge(acs, ppp, by = "year")
+# acs[, incwage := incwage/xwalk_fac]
+# create log inc wage
+acs[, log_incwage := log(incwage + 1)]
+
+# load occ_soc xwalk
+occ_xwalk <- data.table(read_excel("../ref/nem-occcode-cps-crosswalk.xlsx"))
+names(occ_xwalk) <- occ_xwalk[4,] %>% unlist()
+occ_xwalk <- occ_xwalk[-(1:4),]
+occ_xwalk[, OCCSOC := gsub("-", "", `Hybrid SOC Code`)]
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+
+# reformate onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+skills <- skills[Scale.ID == "LV",.(Data.Value = mean(Data.Value),
+                                    Standard.Error = mean(as.numeric(Standard.Error))), by = .(Element.Name,Scale.ID, OCCSOC)]
+
+# chack to see which occ codes are missing
+occ_xwalk[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+
+# 
+skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+skills_wide <- dcast(skills[Scale.ID == "LV"], OCCSOC   ~Element.Name, value.var = "Data.Value")
+res.pca <- prcomp(skills_wide[,2:34], scale = TRUE, center = T)
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, pc1 := predict(res.pca, newdata = .SD)[,1], .SDcols = names(skills_sum)]
+skills_sum[, pc2 := predict(res.pca, newdata = .SD)[,2], .SDcols = names(skills_sum)]
+skills_sum[, pc3 := predict(res.pca, newdata = .SD)[,3], .SDcols = names(skills_sum)]
+skills_sum[, pc4 := predict(res.pca, newdata = .SD)[,4], .SDcols = names(skills_sum)]
+
+skills_sum[, programming := Programming]
+skills_sum[, tech_skills := Programming + `Complex Problem Solving` +
+             `Mathematics` + Programming + Science + `Systems Analysis` + 
+             Troubleshooting]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)]
+skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
+# collapse to OCCSOC
+vars <- names(skills_wide)[-1]
+skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
+acs[, OCC2010 := as.character(OCC2010)]
+
+# merge it all
+acs <- merge(acs, skills_final, 
+             all.x = T,
+             by.x = "OCC2010",
+             by.y = "CPS Code")
+
+# 
+
+
+```
+
+# Compositional Changes
+
+## Plot top 35 Occupations change in % share over time
+
+```{r}
+occ_share <- acs[!is.na(`CPS Occupational Title`),.(N = .N), by = .(`CPS Occupational Title`, OCC2010, year, sex)]
+occ_share[,percent_share := N/sum(N), by = .(year, sex)]
+occ_share[, year_rank := frankv(percent_share, order = -1L), by = .(year, sex)]
+occ_share <- occ_share[`CPS Occupational Title` %in% occ_share[year %in% c(1981, 2020) & year_rank <= 20, unique(`CPS Occupational Title`)]]
+occ_share[, `CPS Occupational Title` := paste0(str_sub(`CPS Occupational Title`,1,10), "...\n", 
+                                               str_sub(`CPS Occupational Title`,-10,-1))]
+occ_share[, `CPS Occupational Title` := factor(`CPS Occupational Title`, levels = occ_share[year == 2020 & sex == "male"] %>% .[order(percent_share, decreasing = T), `CPS Occupational Title`])]
+ggplot(occ_share) + 
+  geom_line(aes(x = year, y = percent_share*100, group = paste(`CPS Occupational Title`, sex), color = sex)) + 
+  facet_wrap(~`CPS Occupational Title`)+
+    theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1))+
+    scale_y_continuous(trans = "log10")+
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+
+
+```
+
+## Repeat for younger ages (25-34)
+
+```{r}
+occ_share <- acs[!is.na(`CPS Occupational Title`) & as.numeric(as.character(age)) <= 34,.(N = .N), by = .(`CPS Occupational Title`, OCC2010, year, sex)]
+occ_share[,percent_share := N/sum(N), by = .(year, sex)]
+occ_share[, year_rank := frankv(percent_share, order = -1L), by = .(year, sex)]
+occ_share <- occ_share[`CPS Occupational Title` %in% occ_share[year %in% c(1981, 2020) & year_rank <= 20, unique(`CPS Occupational Title`)]]
+occ_share[, `CPS Occupational Title` := paste0(str_sub(`CPS Occupational Title`,1,10), "...\n", 
+                                               str_sub(`CPS Occupational Title`,-10,-1))]
+occ_share[, `CPS Occupational Title` := factor(`CPS Occupational Title`, levels = occ_share[year == 2020 & sex == "male"] %>% .[order(percent_share, decreasing = T), `CPS Occupational Title`])]
+ggplot(occ_share) + 
+  geom_line(aes(x = year, y = percent_share*100, group = paste(`CPS Occupational Title`, sex), color = sex)) + 
+  facet_wrap(~`CPS Occupational Title`)+
+    theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) +
+  scale_y_continuous(trans = "log10") + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+
+```
+
+## Plot average value for each skill over time, all ages
+
+```{r}
+skill_share <- acs[, lapply(.SD, weighted.mean, w = asecwt, na.rm = T), .SDcols = vars, by = .(sex, year)]
+skill_share <- melt(skill_share, id.vars = c("year", "sex"))
+skill_share[, variable := substr(variable, 1,15)]
+skill_share[, variable := factor(variable, levels = skill_share[year == 1981 & sex == "male"] %>% .[order(value, decreasing = T), variable])]
+ggplot(skill_share[!variable %like% "pc|average|tech"]) + 
+  geom_line(aes(x = year, y = value, group = paste0(sex, variable), color = sex))+
+facet_wrap(~variable) +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+```
+## Repeat for younger ages (25-34)
+
+```{r}
+skill_share <- acs[as.numeric(as.character(age)) <= 34, lapply(.SD, weighted.mean, w = asecwt, na.rm = T), .SDcols = vars, by = .(sex, year)]
+skill_share <- melt(skill_share, id.vars = c("year", "sex"))
+skill_share[, variable := substr(variable, 1,15)]
+skill_share[, variable := factor(variable, levels = skill_share[year == 1981 & sex == "male"] %>% .[order(value, decreasing = T), variable])]
+ggplot(skill_share[!variable %like% "pc|average|tech"]) + 
+  geom_line(aes(x = year, y = value, group = paste0(sex, variable), color = sex))+
+facet_wrap(~variable) +
+  theme(axis.text.x = element_text(angle = -90, vjust = 0.5, hjust=1)) + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+```
+
+
+# See if movement between occupations clusters by skill, at the cohort level
+
+## First, visualize movement between occupaitons
+
+```{r}
+acs[as.numeric(as.character(age)) <= 59, cohort := floor((year - as.numeric(as.character(age)))/10)*10]
+
+ggplot(acs) + 
+  geom_density(aes(x = average_value_skills, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("Average Value Skills")
+
+ggplot(acs) + 
+  geom_density(aes(x = tech_skills, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("Tech Skills")
+
+ggplot(acs) + 
+  geom_density(aes(x = programming, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("Programming Skills")
+
+ggplot(acs) + 
+  geom_density(aes(x = pc1, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("PC1")
+
+ggplot(acs) + 
+  geom_density(aes(x = pc2, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("PC2")
+
+ggplot(acs) + 
+  geom_density(aes(x = pc3, color = age_cat, fill = age_cat), alpha = .2) + 
+  facet_wrap(~cohort) + 
+  ggtitle("PC3")
+
+ggplot(acs) + 
+  geom_density(aes(x = pc4, color = age_cat, fill = age_cat), alpha = .1) + 
+  facet_wrap(~cohort) + 
+  ggtitle("PC4")
+```
+
+# See if movement between occupations clusters by skill, at the individual level
+
+## First, visualize movement between occupaitons
+
+```{r}
+# merge on both new and old jobs
+setnames(acs, vars, paste0(vars, "_current"))
+setnames(acs, "CPS Occupational Title","CPS Occupational Title_current")
+# merge it all
+acs[, OCC10LY := as.character(OCC10LY)]
+acs <- merge(acs, skills_final, 
+             all.x = T,
+             by.x = "OCC10LY",
+             by.y = "CPS Code")
+
+setnames(acs, vars, paste0(vars, "_ly"))
+setnames(acs, "CPS Occupational Title","CPS Occupational Title_ly")
+
+# subset to places where people have moved jobs
+acs_moved <- acs[OCC2010 != OCC10LY]
+
+# calculate flows
+acs_flows <- acs[!is.na(`CPS Occupational Title_current`) & 
+                   !is.na(`CPS Occupational Title_ly`),.(mvmt = .N), by = .(OCC2010, OCC10LY, `CPS Occupational Title_current`, `CPS Occupational Title_ly`)]
+
+# graph top movment
+temp <- acs_moved[, .N, by = OCC10LY] %>% .[order(N, decreasing = T)] %>% .[1:7, OCC10LY]
+acs_flows[,rank := frankv(mvmt, order = -1L, ties.method = "first"), by = OCC10LY]
+acs_flows[, OCC_title_ly := paste0(str_sub(`CPS Occupational Title_ly`, 1, 15), 
+                                   "...")]
+acs_flows[, OCC_title_current:= paste0(str_sub(`CPS Occupational Title_current`, 1, 15), 
+                                   "...")]
+
+acs_flows[, OCC_title_current := factor(OCC_title_current)]
+
+ggplot(acs_flows[OCC10LY %in% temp & rank %in% 2:6]) +
+  geom_bar(aes(x = OCC_title_ly, y = mvmt, fill = OCC_title_current), position = position_stack(),
+           stat = "identity") + 
+  geom_text(aes(x = OCC_title_ly, y = mvmt,label = OCC_title_current, group = OCC_title_current),
+             position = position_stack(vjust = 0.5)) + 
+  guides(fill = F) + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+```
+
+## See how these cluster by skill
+
+```{r, out.width="600px"}
+skills_subs <- acs[!is.na(`CPS Occupational Title_current`) &
+                     !is.na(`CPS Occupational Title_ly`),.SD, .SDcols = names(acs)[names(acs) %like% "_ly|_current"]] %>% unique()
+
+
+acs_flows_merged <- merge(acs_flows, skills_subs)
+
+acs_flows_merged_melt <- melt(acs_flows_merged, id.vars = c("CPS Occupational Title_current", 
+                                                            "CPS Occupational Title_ly",
+                                                            "OCC2010", "OCC10LY",
+                                                            "mvmt", "rank"))
+
+acs_flows_merged_melt[, value := as.numeric(value)]
+acs_flows_merged_melt <- acs_flows_merged_melt[!is.na(value)]
+
+# cast wide
+acs_flows_merged_melt[, current := ifelse(variable %like% "current", "current", "ly")]
+acs_flows_merged_melt[, variable := gsub("_current|_ly", "", variable)]
+acs_flows_merged_wide <- dcast(acs_flows_merged_melt, ... ~ current, value.var = "value")
+
+# rate standardize
+acs_flows_merged_wide[, mvmt_percent := mvmt/sum(mvmt), by = .(OCC10LY, variable)]
+# plot
+ggplot(acs_flows_merged_wide[OCC2010 != OCC10LY & 
+                               mvmt > 20 & variable %in% unique(acs_flows_merged_wide$variable)[1:21]]) +
+  geom_point(aes(x = current, y = ly, size = mvmt_percent, alpha = mvmt)) + 
+  facet_wrap(~variable, scales = "free") + 
+  scale_alpha_continuous(trans = "log10") + 
+  scale_size_continuous(range = c(0, 2)) + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+
+ggplot(acs_flows_merged_wide[OCC2010 != OCC10LY & 
+                               mvmt > 20 & variable %in% unique(acs_flows_merged_wide$variable)[22:42]]) +
+  geom_point(aes(x = current, y = ly, size = mvmt_percent, alpha = mvmt)) + 
+  facet_wrap(~variable, scales = "free") + 
+  scale_alpha_continuous(trans = "log10")  + 
+  scale_size_continuous(range = c(0, 2)) + 
+  theme(strip.text = element_text(size = 5), axis.text = element_text(size = 5))
+```
+
+# See if we can recreate the sakomoto graphs from last week
+
+```{r}
+acs2 <- data.table(readstata13::read.dta13("../inputs/cps_00004.dta"))
+acs2 <- acs2[year %in% seq(1981, 2020, 6)]
+#acs2 <- acs2[year %in% c(1981,2020)]
+
+#acs2 <- acs2[
+  # acs2$empstat == "at work" &
+  #                            (acs2$schlcoll %like% "does not attend|niu"| is.na(acs2$schlcoll)) &
+  #                            as.numeric(as.character(acs2$age)) %in% 25:64 &
+                             #acs2$wkswork1 >= 30 & ### !!!!! ahhhh
+                             #acs2$incwage != 99999999,]
+                            # acs2$incwage > 0,]
+acs2[, log_incwage := log(incwage + 1)]
+acs2[, ed_num := as.numeric(as.character(factor(educ,levels = levels(acs2$educ), labels = c(0,0,0,2.5,1,2,3,4,5.5,
+                                                                5,6,7.5, 7,8,9,10,11,11, 11, 11,12,
+                                                                13,14,14,15,15,15,16,16,17,17,18,18,18,18,NA))))]
+
+acs2[ed_num <= 14, ed_categ := "Less than HS"]
+acs2[ed_num > 14, ed_categ := "College Plus"]
+
+# r_sq_dt <- data.table()
+# i <- 0
+# for(c.year in unique(acs2$year)){
+#   for(c.educ_yr in unique(acs2[!is.na(ed_categ)]$ed_categ)){
+#     for(c.sex in list("male", "female", c("male", "female"))){
+#       i <- i + 1
+#       print(i)
+#       out <- lm(log_incwage ~ as.factor(occ2010), data = acs2[year == c.year & ed_categ == c.educ_yr & 
+#                                                        sex %in% c.sex])
+#       out_dt <- data.table(year = c.year, ed_categ = c.educ_yr,
+#                            sex = paste0(c.sex, collapse = ","),
+#                            r_sq = summary(out)$r.squared)
+#       r_sq_dt <- rbind(r_sq_dt, out_dt, fill = T)
+#     }
+#   }
+# }
+# 
+# ggplot(r_sq_dt) + 
+#   geom_point(aes(x = year, y = r_sq, color = ed_categ)) + 
+#   geom_line(aes(x = year, y = r_sq, color = ed_categ, group = ed_categ)) + 
+#   labs(title = "R-Squared for Occupation (Most Detailed)\nRegressed on Log(Income), all Cases") + 
+#   facet_wrap(~sex)
+
+```
+
+### Drop missing
+
+```{r}
+
+acs2 <- acs2[
+  # acs2$empstat == "at work" &
+  #                            (acs2$schlcoll %like% "does not attend|niu"| is.na(acs2$schlcoll)) &
+  #                            as.numeric(as.character(acs2$age)) %in% 25:64 &
+                             #acs2$wkswork1 >= 30 & ### !!!!! ahhhh
+                             acs2$incwage != 99999999,]
+                            # acs2$incwage > 0,]
+
+# r_sq_dt <- data.table()
+# i <- 0
+# for(c.year in unique(acs2$year)){
+#   for(c.educ_yr in unique(acs2[!is.na(ed_categ)]$ed_categ)){
+#     for(c.sex in list("male", "female", c("male", "female"))){
+#       i <- i + 1
+#       print(i)
+#       out <- lm(log_incwage ~ as.factor(occ2010), data = acs2[year == c.year & ed_categ == c.educ_yr & 
+#                                                        sex %in% c.sex])
+#       out_dt <- data.table(year = c.year, ed_categ = c.educ_yr,
+#                            sex = paste0(c.sex, collapse = ","),
+#                            r_sq = summary(out)$r.squared)
+#       r_sq_dt <- rbind(r_sq_dt, out_dt, fill = T)
+#     }
+#   }
+# }
+# 
+# ggplot(r_sq_dt) + 
+#   geom_point(aes(x = year, y = r_sq, color = ed_categ)) + 
+#   geom_line(aes(x = year, y = r_sq, color = ed_categ, group = ed_categ)) + 
+#   labs(title = "R-Squared for Occupation (Most Detailed)\nRegressed on Log(Income), all Cases") + 
+#   facet_wrap(~sex)
+
+```
+
+### Drop missing + 0 earners
+
+```{r}
+
+acs2 <- acs2[
+  # acs2$empstat == "at work" &
+  #                            (acs2$schlcoll %like% "does not attend|niu"| is.na(acs2$schlcoll)) &
+  #                            as.numeric(as.character(acs2$age)) %in% 25:64 &
+                             #acs2$wkswork1 >= 30 & ### !!!!! ahhhh
+                             acs2$incwage != 99999999 &
+                             acs2$incwage > 0,]
+
+r_sq_dt <- data.table()
+i <- 0
+for(c.year in unique(acs2$year)){
+  for(c.educ_yr in unique(acs2[!is.na(ed_categ)]$ed_categ)){
+    for(c.sex in list("male", "female", c("male", "female"))){
+      i <- i + 1
+      print(i)
+      out <- lm(log_incwage ~ as.factor(occ2010), data = acs2[year == c.year & ed_categ == c.educ_yr &
+                                                       sex %in% c.sex])
+      out_dt <- data.table(year = c.year, ed_categ = c.educ_yr,
+                           sex = paste0(c.sex, collapse = ","),
+                           r_sq = summary(out)$r.squared)
+      r_sq_dt <- rbind(r_sq_dt, out_dt, fill = T)
+    }
+  }
+}
+
+ggplot(r_sq_dt) +
+  geom_point(aes(x = year, y = r_sq, color = ed_categ)) +
+  geom_line(aes(x = year, y = r_sq, color = ed_categ, group = ed_categ)) +
+  labs(title = "R-Squared for Occupation (Most Detailed)\nRegressed on Log(Income), all Cases") +
+  facet_wrap(~sex)
+
+```
+
+### Drop missing + 0 earners and part timers
+
+```{r}
+
+acs2 <- acs2[
+  # acs2$empstat == "at work" &
+  #                            (acs2$schlcoll %like% "does not attend|niu"| is.na(acs2$schlcoll)) &
+  #                            as.numeric(as.character(acs2$age)) %in% 25:64 &
+                             acs2$wkswork1 >= 30 & ### !!!!! ahhhh
+                             acs2$incwage != 99999999 &
+                             acs2$incwage > 0,]
+
+r_sq_dt <- data.table()
+i <- 0
+for(c.year in unique(acs2$year)){
+  for(c.educ_yr in unique(acs2[!is.na(ed_categ)]$ed_categ)){
+    for(c.sex in list("male", "female", c("male", "female"))){
+      i <- i + 1
+      print(i)
+      out <- lm(log_incwage ~ as.factor(occ2010), data = acs2[year == c.year & ed_categ == c.educ_yr & 
+                                                       sex %in% c.sex])
+      out_dt <- data.table(year = c.year, ed_categ = c.educ_yr,
+                           sex = paste0(c.sex, collapse = ","),
+                           r_sq = summary(out)$r.squared)
+      r_sq_dt <- rbind(r_sq_dt, out_dt, fill = T)
+    }
+  }
+}
+
+ggplot(r_sq_dt) + 
+  geom_point(aes(x = year, y = r_sq, color = ed_categ)) + 
+  geom_line(aes(x = year, y = r_sq, color = ed_categ, group = ed_categ)) + 
+  labs(title = "R-Squared for Occupation (Most Detailed)\nRegressed on Log(Income), all Cases") + 
+  facet_wrap(~sex)
+
+```
+
+### Compositional Biases induced by dropping part time workers and 0 earners + missing
+
+```{r}
+acs2 <- acs2[
+   acs2$empstat %like% "at work|armed|has job" &
+                              (acs2$schlcoll %like% "does not attend|niu"| is.na(acs2$schlcoll)) &
+                              as.numeric(as.character(acs2$age)) %in% 25:64 &
+                             acs2$wkswork1 >= 30 & ### !!!!! ahhhh
+                             acs2$incwage != 99999999 &
+                             acs2$incwage > 0,]
+
+
+r_sq_dt <- data.table()
+i <- 0
+for(c.year in unique(acs2$year)){
+  for(c.educ_yr in unique(acs2[!is.na(ed_categ)]$ed_categ)){
+    for(c.sex in list("male", "female", c("male", "female"))){
+      i <- i + 1
+      print(i)
+      out <- lm(log_incwage ~ as.factor(occ2010), data = acs2[year == c.year & ed_categ == c.educ_yr & 
+                                                       sex %in% c.sex])
+      out_dt <- data.table(year = c.year, ed_categ = c.educ_yr,
+                           sex = paste0(c.sex, collapse = ","),
+                           r_sq = summary(out)$r.squared)
+      r_sq_dt <- rbind(r_sq_dt, out_dt, fill = T)
+    }
+  }
+}
+
+ggplot(r_sq_dt) + 
+  geom_point(aes(x = year, y = r_sq, color = ed_categ)) + 
+  geom_line(aes(x = year, y = r_sq, color = ed_categ, group = ed_categ)) + 
+  labs(title = "R-Squared for Occupation (Most Detailed)\nRegressed on Log(Income), Partial Cases") + 
+  facet_wrap(~sex)
+
 ```
