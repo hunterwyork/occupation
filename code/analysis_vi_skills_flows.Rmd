@@ -107,7 +107,38 @@ setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fix
 skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
 skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
 skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+skills[, Element.Name := paste0("skl_", Element.Name)]
+# add abilities
+abilities_2009 <- read.delim('../ref/db_14_0 2009.7/Abilities.txt') %>% data.table()
+abilities_2013 <-  read.delim('../ref/db_18_0_2013.7/Abilities.txt') %>% data.table()
+abilities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Abilities.xlsx") %>% data.table()
+abilities_2009[, year := 2009]
+abilities_2013[, year := 2013]
+abilities_2018[, year := 2018]
+setnames(abilities_2018, names(abilities_2018), gsub(" ", ".", names(abilities_2018), fixed = T))
+abilities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+abilities <- rbindlist(list(abilities_2009, abilities_2013, abilities_2018), fill = T)
+abilities <- abilities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+abilities[, Element.Name := paste0("abl_", Element.Name)]
 
+# add knowledge
+knowledge_2009 <- read.delim('../ref/db_14_0 2009.7/Knowledge.txt') %>% data.table()
+knowledge_2013 <-  read.delim('../ref/db_18_0_2013.7/Knowledge.txt') %>% data.table()
+knowledge_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Knowledge.xlsx") %>% data.table()
+knowledge_2009[, year := 2009]
+knowledge_2013[, year := 2013]
+knowledge_2018[, year := 2018]
+setnames(knowledge_2018, names(knowledge_2018), gsub(" ", ".", names(knowledge_2018), fixed = T))
+knowledge_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+knowledge <- rbindlist(list(knowledge_2009, knowledge_2013, knowledge_2018), fill = T)
+knowledge <- knowledge[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+knowledge[, Element.Name := paste0("knl_", Element.Name)]
+
+#
+skills <- rbindlist(list(skills, knowledge, abilities))
+
+#
+skills <- skills[Scale.ID == "LV"]
 # reformate onet codes to merge
 skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
 skills <- skills[,.(Data.Value = mean(Data.Value),
@@ -128,20 +159,109 @@ skills_sum[, pc2 := predict(res.pca, newdata = .SD)[,2], .SDcols = names(skills_
 skills_sum[, pc3 := predict(res.pca, newdata = .SD)[,3], .SDcols = names(skills_sum)]
 skills_sum[, pc4 := predict(res.pca, newdata = .SD)[,4], .SDcols = names(skills_sum)]
 
-skills_sum[, tech_skill.LV := Programming.LV + `Complex Problem Solving.LV` +
-             `Mathematics.LV`  + Science.LV + `Systems Analysis.LV` + 
-             Troubleshooting.LV]
-skills_sum[, tech_skill.IM := Programming.IM + `Complex Problem Solving.IM` +
-             `Mathematics.IM`  + Science.IM + `Systems Analysis.IM` + 
-             Troubleshooting.IM]
-skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV"]]
+skills_sum[, skl_tech_skill.LV := skl_Programming.LV + `skl_Complex Problem Solving.LV` +
+             `skl_Mathematics.LV`  + skl_Science.LV + `skl_Systems Analysis.LV` + 
+             skl_Troubleshooting.LV]
+# skills_sum[, skl_tech_skill.IM := skl_Programming.IM + `skl_Complex Problem Solving.IM` +
+#              `skl_Mathematics.IM`  + skl_Science.IM + `skl_Systems Analysis.IM` + 
+#              skl_Troubleshooting.IM]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "skl"]]
+skills_sum[, average_value_abilities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "abl"]]
+skills_sum[, average_value_knowledge := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "knl"]]
+
 skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
 
 # collapse to OCCSOC
 vars <- names(skills_wide)[-1]
 skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
 acs[, OCC2010 := as.character(OCC2010)]
 
+#standardize occ2010 to match occ2019
+acs[,.(OCC2010, OCC1990)] %>% unique -> temp
+temp <- temp[!duplicated(temp$OCC2010)]
+skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
+vars_temp <- names(skills_final)[!names(skills_final) %like% "CPS|OCC"]
+skills_final[, (vars_temp) := lapply(.SD, mean, na.rm = T), by = OCC1990, .SDcols = vars_temp]
+skills_final[,OCC1990 := NULL]
+
+#clean up memory
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var", "skills_final")])
+```
+
+
+### See how Adjusted Mutual Information Looks (Per Cheng and Park)
+
+The following section compares the above classification system to Micro, Meso, and Macro occupation schedules using the 1950 occupation basis, per Siwei's crosswalk. This would ideally be updated to a more recent basis.
+
+```{r}
+# cheng xwalk
+cheng <- data.table(readstata13::read.dta13("../ref/occ1950_mc_xwalk_70.dta"))
+cheng[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# occ50 recode
+occ50_recode <- fread("../ref/occ1950_recode.csv")
+occ50_recode <- occ50_recode[,1:2]
+names(occ50_recode) <- unlist(occ50_recode[1, ])
+occ50_recode <- occ50_recode[-1,]
+occ50_recode <- occ50_recode[!is.na(as.numeric(occ1950_num))]
+occ50_recode[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# merge
+cheng <- merge(cheng, occ50_recode[,.(occ1950, occ1950_num)], all.x = T)
+
+#fix the stragglers
+fix <- cheng[is.na(occ1950_num)]
+candidates <- occ50_recode[!occ1950 %in% cheng$occ1950]
+
+for(c.fix in 1:nrow(fix)){
+  goal <- substr(fix[c.fix, occ1950],1,7)
+  new <- candidates[candidates$occ1950 %like% goal, occ1950_num]
+  if(length(new) == 1){fix[c.fix, new_occ1950_num := new]}
+}
+
+
+fix[is.na(new_occ1950_num), new_occ1950_num := c(43, 34, 44, 603, 16, 46, 605,94, 19,48,69,84,26,23,27,29)]
+
+cheng <- merge(cheng, fix[,.(occ1950, new_occ1950_num)], by = "occ1950", all.x = T)
+cheng[is.na(occ1950_num), occ1950_num := new_occ1950_num]
+cheng[, occ1950_num := as.numeric(occ1950_num)]
+cheng[, new_occ1950_num := NULL]
+setnames(cheng, "occ1950_num", "OCC1950")
+cheng[, occ1950 := NULL]
+
+factorr <- function(x){ifelse(is.character(x), return(factor(x)), return(x))}
+cheng[,names(cheng) := lapply(.SD, factorr), .SDcols = names(cheng)]
+
+names(acs)[!names(acs) %like% "skl|knl|abl"] -> temp_vars
+acs[, (temp_vars) := lapply(.SD, factorr), .SDcols = temp_vars]
+
+#acs <- merge(acs, cheng, by.x = "OCC1950", by.y = "occ1950_num", all.x = T)
+acs[,c("race", "hispan", "schlcoll","empstat","ahrsworkt",
+       "wkswork1","uhrsworkly","classwly","workly",
+       "HOURWAGE"):= NULL]
+
+acs <- acs[cheng, on = "OCC1950"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_current"))
+
+setnames(cheng, "OCC1950", "OCC50LY")
+
+acs <- acs[cheng, on = "OCC50LY"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_ly"))
+
+# loop over scheme and calculate concordance
+for(c.scheme in  c( "mesoocc", "macroocc", "microocc")){
+  acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
+}
+
+
+```
+
+
+
+```{r}
 # merge it all
 acs <- merge(acs, skills_final, 
              all.x = T,
@@ -189,58 +309,6 @@ acs_flows[, OCC_title_current := factor(OCC_title_current)]
 
 In the following section, I will attempt to create some sort of aggregation of occupational classifications based on skills alone. I aim to create 82 classes to compare with the micro-class scheme proffered by Grusky et al., but many decisions are fickle and subject to my own bias. As a first pass, I'm creating 80 classes using 5 quintiles of pc1, 4 quartiles of pc2, and 2 quantiles of pc3 and pc4. Each combination of these latent variables will correspond to a skills-based occupation category. 
 
-### Run the code
-
-```{r}
-# subset to only acs for where we have skill data
-acs <- acs[!is.na(pc1_current)]
-# first establish cutpoints for each of the latent variables
-lat_var_cps <- list()
-for(i in 1:4){
-  if(i == 1){q <-3}else if(i == 2){q <- 3}else{q <-3}
-  lat_var_cps[[i]]<- quantile(acs[,get(paste0("pc", i, "_current"))], 
-                              probs = seq(0,1,length.out = q + 1), na.rm = T)
-}
-
-# use the cutpoints to bin each individual into the quantiles
-for(i in 1:4){
-  for(q in 1:(length(lat_var_cps[[i]]) - 1)){
-    print(paste0(i,q))
-    if(q == 1){
-      acs[get(paste0("pc", i, "_current")) >= lat_var_cps[[i]][q] & 
-            get(paste0("pc", i,  "_current")) <= lat_var_cps[[i]][q + 1], paste0("pc", i, "_binned") := q]
-    }else{
-      acs[get(paste0("pc", i, "_current")) > lat_var_cps[[i]][q] & 
-            get(paste0("pc", i,  "_current")) <= lat_var_cps[[i]][q + 1], paste0("pc", i, "_binned") := q]
-    }
-  }
-}
-
-# now construct them into one categorical variable
-acs[,skill_bin := paste0(pc1_binned, pc2_binned, pc3_binned, pc4_binned)]
-```
-
-### See how the distribution looks
-
-```{r}
-ggplot(acs) + geom_bar(aes(x = skill_bin))
-```
-
-Not bad, but also not great There's a few intersections of the bins that have no observations. 
-
-### See what the groupings of jobs are for each cluster of skills
-
-```{r}
-# creata dataset of skills groupings and children occupations
-skills_occs_list <- acs[, .N, by = .(OCC2010,`CPS Occupational Title_current`, skill_bin)]
-skills_occs_list[, grand_N := sum(N), by = skill_bin]
-
-# show top 10 
-unique(skills_occs_list[order(grand_N, decreasing = T),.(skill_bin, grand_N)][, skill_bin])[1:5] -> temp
-skills_occs_list[skill_bin %in% temp] %>% .[order(grand_N, decreasing = T)]
-
-
-```
 
 ### Compute skills distance between all job movements
 
@@ -253,15 +321,9 @@ Where: $D_{i,j}$ is the skill distance from job i to job j.
 The following graph shows the distribution of skill distance for all occupational movements.
 
 ```{r}
-acs[, skills_distance := (abs((pc1_current -pc1_ly)*(pc2_current - pc2_ly)*(pc3_current - pc3_ly)*(pc4_current  - pc4_ly)))^(1/4)]
-
-for(i in 1:4){
-  acs[, paste0("pc", i, "_distance") := abs(get(paste0('pc', i, '_current')) - get(paste0('pc', i, '_ly')))]
-  acs[, paste0("pc", i, "_diff") := (get(paste0('pc', i, '_current')) - get(paste0('pc', i, '_ly')))]
-}
 
 for(c.skill in vars){
-  acs[, paste0(c.skill, "_distance") := abs(get(paste0(c.skill, '_current')) - get(paste0(c.skill, '_ly')))]
+  #acs[, paste0(c.skill, "_distance") := abs(get(paste0(c.skill, '_current')) - get(paste0(c.skill, '_ly')))]
   acs[, paste0(c.skill, "_diff") := (get(paste0(c.skill, '_current')) - get(paste0(c.skill, '_ly')))]
   
 }
@@ -276,22 +338,14 @@ skills_flows <- acs[OCC10LY != OCC2010]
 #   xlim(0,1) + 
 #   geom_abline(intercept = 2831.867, slope = -2831.867)
 
-ggplot(skills_flows[ind1990 == ind90ly,.SD, .SDcols = "skills_distance"] %>% melt()) + 
-  geom_histogram(aes(x = value), bins = 100) + 
-  geom_vline(aes(xintercept = mean, group = variable), 
-             
-             data = skills_flows[ind1990 == ind90ly,.SD, .SDcols = "skills_distance"] %>% melt() %>% .[,.(mean = mean(value, na.rm = T)), by = variable],
-             
-             color = "blue" )+
-  facet_wrap(~variable) + 
-  
-  geom_vline(xintercept = 0, color = "red")
 
-ggplot(skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like% "skills|pc|tech|IM"], "_diff")] %>% melt()) + 
+ggplot(skills_flows[ind1990 == ind90ly,.SD,
+                    .SDcols = paste0(vars[!vars %like% "skills|pc|tech|IM|average|skl|knl"], "_diff")] %>% melt()) + 
   geom_histogram(aes(x = value), bins = 100) + 
   geom_vline(aes(xintercept = mean, group = variable), 
              
-             data = skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like% "skills|pc|tech|IM"], "_diff")] %>% melt() %>% .[,.(mean = mean(value, na.rm = T)), by = variable],
+             data = skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like%"skills|pc|tech|IM|average|skl|knl"], "_diff")] %>%
+               melt() %>% .[,.(mean = mean(value, na.rm = T)), by = variable],
              
              color = "blue" )+
   facet_wrap(~variable) + 
@@ -299,7 +353,8 @@ ggplot(skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like% "
   xlim(-1,1)   +
   geom_vline(xintercept = 0, color = "red")
 
-ggplot(skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like% "skills|pc|tech|LV"], "_diff")] %>% melt()) + 
+ggplot(skills_flows[ind1990 == ind90ly,.SD, 
+                    .SDcols = paste0(vars[!vars %like% "skills|pc|tech|IM|average|skl|knl"], "_diff")] %>% melt()) + 
   geom_histogram(aes(x = value), bins = 100) + 
   geom_vline(aes(xintercept = mean, group = variable), 
              
@@ -310,227 +365,27 @@ ggplot(skills_flows[ind1990 == ind90ly,.SD, .SDcols = paste0(vars[!vars %like% "
   
   xlim(-1,1)  +
   geom_vline(xintercept = 0, color = "red")
+
+
+acs[,paste0(vars, "_diff") := NULL]
 ```
 
 Right skewed = good! More people are shifting between jobs with similar skillsets than dissimilar skill sets.
 
 
-### See how Adjusted Mutual Information Looks (Per Cheng and Park)
 
-The following section compares the above classification system to Micro, Meso, and Macro occupation schedules using the 1950 occupation basis, per Siwei's crosswalk. This would ideally be updated to a more recent basis.
-
-```{r}
-# cheng xwalk
-cheng <- data.table(readstata13::read.dta13("../ref/occ1950_mc_xwalk_70.dta"))
-cheng[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
-
-# occ50 recode
-occ50_recode <- fread("../ref/occ1950_recode.csv")
-occ50_recode <- occ50_recode[,1:2]
-names(occ50_recode) <- unlist(occ50_recode[1, ])
-occ50_recode <- occ50_recode[-1,]
-occ50_recode <- occ50_recode[!is.na(as.numeric(occ1950_num))]
-occ50_recode[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
-
-# merge
-cheng <- merge(cheng, occ50_recode[,.(occ1950, occ1950_num)], all.x = T)
-
-#fix the stragglers
-fix <- cheng[is.na(occ1950_num)]
-candidates <- occ50_recode[!occ1950 %in% cheng$occ1950]
-
-for(c.fix in 1:nrow(fix)){
-  goal <- substr(fix[c.fix, occ1950],1,7)
-  new <- candidates[candidates$occ1950 %like% goal, occ1950_num]
-  if(length(new) == 1){fix[c.fix, new_occ1950_num := new]}
-}
-
-
-fix[is.na(new_occ1950_num), new_occ1950_num := c(43, 34, 44, 603, 16, 46, 605,94, 19,48,69,84,26,23,27,29)]
-
-cheng <- merge(cheng, fix[,.(occ1950, new_occ1950_num)], by = "occ1950", all.x = T)
-cheng[is.na(occ1950_num), occ1950_num := new_occ1950_num]
-cheng[, occ1950_num := as.numeric(occ1950_num)]
-
-acs <- merge(acs, cheng, by.x = "OCC1950", by.y = "occ1950_num", all.x = T)
-
-# now compute AMI
-ami_scores <- acs[complete.cases(acs[,.(skill_bin, macroocc)]),.(macro = aricode::AMI(macroocc, skill_bin), 
-                                                                 meso = aricode::AMI(mesoocc, skill_bin),
-                                                                 micro = aricode::AMI(microocc, skill_bin)), by = .(year)]
-
-ami_scores %>% 
-  melt(., id.var = "year") %>% 
-  ggplot(.) + 
-  geom_line(aes(x = year, y = value, linetype = variable))
-```
-
-### Recreate Table II from Siwei's paper 
-
-This is the number of overlap between each category for each scheme
-
-```{r}
-overlap <- acs[,.(skill_bin, mesoocc, macroocc, microocc, occ1950)] %>% unique()
-overlap_meso_count <- overlap[,.N, by = .(mesoocc, skill_bin)]
-ggplot(overlap_meso_count) + 
-  geom_tile(aes(y = mesoocc, x = skill_bin, fill = N), alpha = .75) + 
-  geom_text(aes(y = mesoocc, x = skill_bin, label = N), size = 2) + 
-  theme(axis.text.x = element_text(angle = 90)) + 
-  ggtitle("Meso-class and Skills-Based Class Concordance\n(Number of Overlapping Occupations)") + 
-  scale_fill_viridis_c()
-
-overlap_micro_count <- overlap[,.N, by = .(microocc, skill_bin)]
-ggplot(overlap_micro_count) + 
-  geom_tile(aes(y = microocc, x = skill_bin, fill = N), alpha = .75) + 
-  geom_text(aes(y = microocc, x = skill_bin, label = N), size = 2) + 
-  theme(axis.text.x = element_text(angle = 90)) + 
-  ggtitle("Micro-class and Skills-Based Class Concordance\n(Number of Overlapping Occupations)")+ 
-  scale_fill_viridis_c()
-
-overlap_macro_count <- overlap[,.N, by = .(macroocc, skill_bin)]
-ggplot(overlap_macro_count) + 
-  geom_tile(aes(y = macroocc, x = skill_bin, fill = N), alpha = .75) + 
-  geom_text(aes(y = macroocc, x = skill_bin, label = N), size = 2) + 
-  theme(axis.text.x = element_text(angle = 90)) + 
-  ggtitle("Macro-class and Skills-Based Class Concordance\n(Number of Overlapping Occupations)")+ 
-  scale_fill_viridis_c()
-```
 
 ### Calculate % of job moves that remain within class for each class
 
 This is obviously biased by the number of classes. I think this can be standardzied mathematically, but I haven't tried to figure that out. 
 
-```{r}
-setnames(acs, c("skill_bin", "mesoocc", "macroocc", "microocc"), paste0(c("skill_bin", "mesoocc", "macroocc", "microocc"), "_current"))
-
-acs <- merge(acs, cheng, by.x = "OCC50LY", by.y = "occ1950_num", all.x = T)
-acs <- merge(acs, skills_occs_list[,.(OCC2010, skill_bin)], by.x = "OCC10LY",  by.y = "OCC2010", all.x = T)
-setnames(acs, c("skill_bin", "mesoocc", "macroocc", "microocc"), paste0(c("skill_bin", "mesoocc", "macroocc", "microocc"), "_ly"))
-
-# loop over scheme and calculate concordance
-for(c.scheme in  c("skill_bin", "mesoocc", "macroocc", "microocc")){
-  acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
-}
-
-# melt and tabulate
-num_correct <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
-total <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), nrow(.SD)]
-num_correct <- num_correct/total
-num_cats <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly"]]
-```
 
 ### See the extent to which interoccupation mobility is defined by upwards mobility in terms of skill
 
-```{r}
-grid_mvmt <- acs[,.N, by = .(skill_bin_ly, skill_bin_current)]
-grid_mvmt[,total_per_source := sum(N), by = skill_bin_ly]
-grid_mvmt[, prop := N/ total_per_source]
-
-acs[,.(skill_bin_ly, average_value_skills_ly)] %>%.[,.(average_value_skills_ly = mean(average_value_skills_ly, na.rm = T)), by = skill_bin_ly] %>% .[order(average_value_skills_ly)] %>% 
-  .[,skill_bin_ly] -> temp
-grid_mvmt[, skill_bin_current := factor(skill_bin_current, levels = temp)]
-grid_mvmt[, skill_bin_ly := factor(skill_bin_ly, levels = temp)]
-
-###
-ggplot(grid_mvmt[skill_bin_ly != skill_bin_current]) + 
-  geom_tile(aes(x = skill_bin_ly, y = skill_bin_current, fill = prop)) +
-  geom_text(aes(x = skill_bin_ly, y = skill_bin_current, label = round(prop, 2)), size = .5) + 
-  scale_fill_viridis_c(trans = "log10")
-```
 
 
 ## Do a grid search to find optimal number of skill bins
 
-```{r}
-# subset to only acs for where we have skill data
-# first establish cutpoints for each of the latent variables
-
-grid_searchr <- function(qlist){
-  qs <- strsplit(qlist, ",")
-  q1 <- qs[[1]][1]
-  q2 <- qs[[1]][2]
-  q3 <- qs[[1]][3]
-  q4 <- qs[[1]][4]
-  
-  lat_var_cps <- list()
-  for(i in 1:4){
-    if(i == 1){q <-q1}else if(i == 2){q <- q2}else if(i == 3){q <-q3}else if(i == 4){q <- q4}
-    q <- as.numeric(q)
-    lat_var_cps[[i]]<- quantile(acs[,get(paste0("pc", i, "_current"))], 
-                                probs = seq(0,1,length.out = q + 1), na.rm = T)
-  }
-  
-  # use the cutpoints to bin each individual into the quantiles
-  for(i in 1:4){
-    for(q in 1:(length(lat_var_cps[[i]]) - 1)){
-      print(paste0(i,q))
-      if(i == 1){
-        acs[get(paste0("pc", i, "_current")) >= lat_var_cps[[i]][q] & 
-              get(paste0("pc", i,  "_current")) <= lat_var_cps[[i]][q + 1], paste0("pc", i, "_binned") := q]
-      }else{
-        acs[get(paste0("pc", i, "_current")) > lat_var_cps[[i]][q] & 
-              get(paste0("pc", i,  "_current")) <= lat_var_cps[[i]][q + 1], paste0("pc", i, "_binned") := q]
-      }
-    }
-  }
-  
-  # now construct them into one categorical variable
-  acs[,skill_bin := paste0(pc1_binned, pc2_binned, pc3_binned, pc4_binned)]
-  
-  # creata dataset of skills groupings and children occupations
-  skills_occs_list <- acs[, .N, by = .(OCC2010,`CPS Occupational Title_current`, skill_bin)]
-  skills_occs_list[, grand_N := sum(N), by = skill_bin]
-  
-  acs[, skill_bin_current := NULL]
-  setnames(acs, "skill_bin", "skill_bin_current")
-  
-  acs <- merge(acs, skills_occs_list[,.(OCC2010, skill_bin)], by.x = "OCC10LY",  by.y = "OCC2010", all.x = T)
-  setnames(acs, c("skill_bin"), paste0(c("skill_bin"), "_ly"))
-  
-  # loop over scheme and calculate concordance
-  for(c.scheme in  c("skill_bin")){
-    acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
-  }
-  
-  # loop over scheme and calculate concordance
-  for(c.scheme in  c("skill_bin")){
-    acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
-  }
-  
-  # melt and tabulate
-  num_correct <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
-  total <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), nrow(.SD)]
-  num_correct <- num_correct/total
-  num_cats <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly"]]
-  
-  acs[, skill_bin := NULL]
-  acs[, skill_bin_current := NULL]
-  acs[, skill_bin_ly := NULL]
-  
-  return(data.table(q1 = q1, q2 = q2, q3= q3, q4= q4, skill_bin_cats = num_cats$skill_bin_ly, skill_bin_correct = num_correct["skill_bin_conc"]))
-}
-
-# ## establish list of parameters to optimize over
-# expand.grid(q1 = seq(2,10,2), q2 = seq(2,10,2), q3 = seq(2,10,2), q4 = seq(2,10,2)) %>% data.table -> candidate_grids
-# candidate_grids[, qs := paste(q1, q2, q3, q4, sep = ",")]
-# candidate_grids[, cats := q1*q2*q3*q4]
-# candidate_grids <- candidate_grids[cats < 150 & cats >= 40]
-# ## loop over
-# acs$skill_bin <- NULL
-# acs$skill_bin_current <- NULL
-# acs$skill_bin_ly <- NULL
-# 
-# grid_out <- lapply(candidate_grids$qs, grid_searchr) %>% rbindlist()
-# 
-# # graph
-# grid_out[, q1q2 := paste0(q1,q2)]
-# grid_out[, q3q4 := paste0(q3,q4)]
-# grid_out[, cats2 := prod(unlist(lapply(.SD, as.numeric))),  .SDcols = paste0('q', 1:4), by = .(q1q2,q3q4)]
-# grid_out[, coef := skill_bin_correct*skill_bin_cats]
-# 
-# ggplot(grid_out) + 
-#   geom_tile(aes(x = q1q2, y = q3q4, fill = coef))
-```
 
 
 ### try network
@@ -541,26 +396,29 @@ grid_searchr <- function(qlist){
 # plot(temp, layout = "spring", labels = colnames(temp))
 # plot(temp, layout = "spring")
 
-
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var")])
 ##################
-acs <- acs[!is.na(`Time Management.IM_ly` & !is.na(`Time Management.IM_current`))]
-df <- data.table(rbind(acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_current" & !names(acs) %like% "tech_skill|pc"]], acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_ly" & !names(acs) %like% "tech_skill|pc"]] %>% setnames(., gsub("_ly", "_current", names(.)))))
+acs <- copy(acs[complete.cases(acs[,.SD, .SDcols = names(acs)[names(acs) %like% "LV" & !names(acs) %like% "tech_skill|average|pc"]])])
 
-stats::kmeans(df, centers = 85) -> temp
+## check out missing cases above!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
+# df <- data.table(rbind(acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_current" & !names(acs) %like% "tech_skill|average|pc"]], acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_ly" & !names(acs) %like% "tech_skill|average|pc"]] %>% setnames(., gsub("_ly", "_current", names(.)))))
 
-# optimize k
-optr <- function(k){
-  stats::kmeans(df, centers = k) -> temp2
-  return(temp2$tot.withinss)
-}
+df <- acs[!duplicated(acs$OCC2010), .SD, .SDcols = names(acs)[names(acs) %like% "skl|knl|abl|OCC2010" & names(acs) %like% "current|OCC2010"]]
+df_occ <- df[,OCC2010]
+df[, OCC2010 := NULL]
+
+stats::kmeans(df, centers = 30) -> temp
+
+df_temp <- data.table(OCC2010 = df_occ, kmeans_cluster = temp$cluster)
+
+acs <- merge(acs, df_temp, by = "OCC2010")
+setnames(acs, "kmeans_cluster", "kmeans_cluster_current")
+
+df_temp <- data.table(OCC10LY = df_occ, kmeans_cluster = temp$cluster)
+acs <- merge(acs, df_temp, by = "OCC10LY")
+setnames(acs, "kmeans_cluster", "kmeans_cluster_ly")
 
 #lapply(seq(5,105,10), optr) -> out
-
-# assign clusters
-acs[, kmeans_cluster_current := temp$cluster[1:nrow(acs)]]
-acs[, kmeans_cluster_ly := temp$cluster[(nrow(acs) + 1):(nrow(acs)*2)]]
-
-#
 
 
 overlap_micro_count <- acs[,.(N = length(unique(OCC2010))), by = .(microocc_current, kmeans_cluster_current)]
@@ -585,10 +443,10 @@ ami_scores %>%
 
 # judge concordance
 acs[, kmeans_cluster_conc := ifelse(kmeans_cluster_current == kmeans_cluster_ly, 1,0)]
-num_correct <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
-total <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), nrow(.SD)]
+num_correct <- acs[OCC1950 != OCC50LY, colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
+total <- acs[OCC1950 != OCC50LY , nrow(.SD)]
 num_correct <- num_correct/total
-num_cats <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly|kmeans_cluster_ly"]]
+num_cats <- acs[OCC1950 != OCC50LY , lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly|kmeans_cluster_ly"]]
 
 # get matrix of means and compute distances between each cluster
 # geometric means
@@ -633,65 +491,195 @@ acs[OCC10LY != OCC2010,.(N = .N, source_kmeans_N = unique(source_kmeans_N)),
 ```
 
 
-### loop over k
+### Display difference in within-cluster variance in skills/knowledge/abilities as k increases
 
 ```{r}
-gg_list <- list()
-q <- 0
-for(k in seq(10,110,20)){
-  q <- q + 1
-  print(k)
-  df <- data.table(rbind(acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_current" & !names(acs) %like% "tech_skill|pc"]], acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_ly" & !names(acs) %like% "tech_skill|pc"]] %>% setnames(., gsub("_ly", "_current", names(.)))))
-  stats::kmeans(df, centers = k) -> temp
+df <- acs[!duplicated(acs$OCC2010), .SD, .SDcols = names(acs)[names(acs) %like% "skl|knl|abl|OCC2010" & names(acs) %like% "current|OCC2010"]]
+df_occ <- df[,OCC2010]
+df[, OCC2010 := NULL]
+
+acs[, c(paste0(vars, "_current"), paste0(vars, "_ly")) := NULL]
+
+optr <- function(k){
+  stats::kmeans(df, centers = k) -> temp2
+  return(data.table(k =k, tot_withinss = temp2$tot.withinss))
+}
+
+lapply(1:250, optr) %>% rbindlist -> optr_out
+ggplot(optr_out) + 
+  geom_point(aes(x = k, y = tot_withinss))
+
+```
+
+### See how different k affects mobility
+
+Set number of k to correspond with meso, micro, macro class schemas and some other random numbers.
+
+k = {4,9,67, 20,30,40,50,80,90,100,120}
+
+```{r}
+
+testr <- function(k){
+  stats::kmeans(df, centers = k) -> temp2
+  df_temp <- data.table(OCC2010 = df_occ, kmeans_cluster = temp2$cluster)
   
-  # assign clusters
-  acs[, kmeans_cluster_current := temp$cluster[1:nrow(acs)]]
-  acs[, kmeans_cluster_ly := temp$cluster[(nrow(acs) + 1):(nrow(acs)*2)]]
+  acs <- merge(acs, df_temp, by = "OCC2010")
+  setnames(acs, "kmeans_cluster", paste0("kmeans_cluster_", k, "_current"))
   
-  #
-  # get matrix of means and compute distances between each cluster
-  # geometric means
-  centers <- temp$centers
+  df_temp <- data.table(OCC10LY = df_occ, kmeans_cluster = temp2$cluster)
+  acs <- merge(acs, df_temp, by = "OCC10LY")
+  setnames(acs, "kmeans_cluster", paste0("kmeans_cluster_", k, "_ly"))
+  
+  
+  centers <- temp2$centers
   centers_long <- melt(centers)
   centers_long <- merge(centers_long, centers_long, by = "Var2", allow.Cartesian = T)
   centers_dist <- data.table(centers_long)[,.(geo_mean_dist = prod(abs(value.x - value.y)) ^ (1/length(value.x))),
                                            by = .(Var1.x, Var1.y)]
-  setnames(centers_dist, c("kmeans_cluster_current", "kmeans_cluster_ly", "geo_mean_dist"))
+  setnames(centers_dist, c(paste0("kmeans_cluster_", k, "_current"), 
+                           paste0("kmeans_cluster_", k, "_ly"), paste0("geo_means_", k, "_dist")))
   
   #
-  acs[, geo_mean_dist := NULL]
-  acs <- merge(acs, centers_dist, by = c("kmeans_cluster_current", "kmeans_cluster_ly"))
+  acs <- merge(acs, centers_dist, by = c(paste0("kmeans_cluster_", k, "_current"),
+                                         paste0("kmeans_cluster_", k, "_ly")))
   
-  #
-  acs[, source_kmeans_N := .N, by = kmeans_cluster_ly]
-  centers <- data.table(centers)
-  centers[,total_skills := rowSums(.SD), .SDcols = names(centers)]
+  acs[,paste0("kmeans_cluster_", k, "_conc") := ifelse(get(paste0("kmeans_cluster_", k, "_current")) == 
+                                                         get(paste0("kmeans_cluster_", k, "_ly")),1,0)]
   
-  acs[, kmeans_cluster_current := factor(kmeans_cluster_current, 
-                                         levels = centers[, order(total_skills)])]
-  acs[, kmeans_cluster_ly := factor(kmeans_cluster_ly, 
-                                    levels = centers[, order(total_skills)])]
+  acs[, paste0("source_kmeans_", k, "_N") := .N, by = get(paste0("kmeans_cluster_", k, "_ly"))]
+  
+  acs[, paste0("kmeans_cluster_", k, "_current") := factor(get(paste0("kmeans_cluster_", k, "_current")), 
+                                                           levels = centers_dist[get(paste0("kmeans_cluster_", k, "_current")) == 1] %>%
+                                                             .[order(get(paste0("geo_means_", k, "_dist")))] %>%
+                                                             .[,get(paste0("kmeans_cluster_", k, "_ly"))])]
+  acs[, paste0("kmeans_cluster_", k, "_ly") := factor(get(paste0("kmeans_cluster_", k, "_ly")), 
+                                                      levels = centers_dist[get(paste0("kmeans_cluster_", k, "_current")) == 1] %>%
+                                                        .[order(get(paste0("geo_means_", k, "_dist")))] %>%
+                                                        .[,get(paste0("kmeans_cluster_", k, "_ly"))])]
   
   
-  gg <- acs[OCC10LY != OCC2010,.(N = .N, source_kmeans_N = unique(source_kmeans_N)),
-            by= .(kmeans_cluster_current, kmeans_cluster_ly)] %>% 
-    .[, total := sum(N), by = kmeans_cluster_ly] %>% 
+  
+  return(acs[,.SD, .SDcols = c(paste0("kmeans_cluster_", k, "_current"),
+                               paste0("kmeans_cluster_", k, "_ly"),
+                               paste0("geo_means_", k, "_dist"),
+                               paste0("kmeans_cluster_", k, "_conc"),
+                               paste0("source_kmeans_", k, "_N") )])
+  
+}
+
+c(4,9,67, 20,30,40,50,80,90,100,120) -> k_cand
+lapply(k_cand, testr) -> testr_out
+
+acs <- bind_cols(acs, testr_out)
+
+
+
+### check concordance of micro meso and macro first
+
+num_correct <- acs[OCC1950 != OCC50LY & !is.na(kmeans_cluster_30_current),
+                   colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
+total <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), nrow(.SD)]
+num_correct <- num_correct/total
+num_cats <- acs[OCC1950 != OCC50LY & !is.na(skill_bin_conc) & !is.na(skill_bin_current) & !is.na(skill_bin_ly), lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly"]]
+
+
+```
+
+
+```{r}
+
+for(k in k_cand){
+  acs[OCC10LY != OCC2010,.(N = .N, source_kmeans_N = unique(get(paste0("source_kmeans_", k, "_N") ))),
+      by= .(get(paste0("kmeans_cluster_", k, "_current")), get(paste0("kmeans_cluster_", k, "_ly")))] %>% 
+    .[, total := sum(N), by = get.1] %>% 
     .[, prop := N/source_kmeans_N] %>% 
     .[N >= 10] %>% 
-    ggplot()+
-      geom_point(aes(y = (kmeans_cluster_current), x = (kmeans_cluster_ly), color = prop, size = N)) + 
-  scale_color_viridis_c(trans = "log10") +
-  scale_radius(trans = "log10")+
-  geom_abline(yintercept = 0, slope = 1, color= "red") +
-  scale_x_discrete(labels = centers[, order(total_skills)],
-                   breaks = centers[, order(total_skills)], drop = F)+
-  scale_y_discrete(labels = centers[, order(total_skills)],
-                   breaks = centers[, order(total_skills)], drop = F)+
-  theme(axis.text.x = element_text(angle = 90))
-  
-  print(gg)
-
+    ggplot() + 
+    geom_point(aes(y = get,
+                   x = get.1, color = prop, size = N)) + 
+    scale_color_viridis_c(trans = "log10") +
+    scale_radius(trans = "log10")+
+    geom_abline(yintercept = 0, slope = 1, color= "red") +
+    scale_x_discrete(drop = F)+
+    scale_y_discrete(drop = F)
 }
+```
+
+
+
+```{r}
+df_temp <- data.table(OCC2010 = df_occ, kmeans_cluster = temp$cluster)
+
+acs <- merge(acs, df_temp, by = "OCC2010")
+setnames(acs, "kmeans_cluster", "kmeans_cluster_current")
+
+df_temp <- data.table(OCC10LY = df_occ, kmeans_cluster = temp$cluster)
+acs <- merge(acs, df_temp, by = "OCC10LY")
+setnames(acs, "kmeans_cluster", "kmeans_cluster_ly")
+
+# optimize k
+optr <- function(k){
+  stats::kmeans(df, centers = k) -> temp2
+  return(temp2$tot.withinss)
+}
+
+
+# gg_list <- list()
+# q <- 0
+# for(k in seq(10,110,20)){
+#   q <- q + 1
+#   print(k)
+#   df <- data.table(rbind(acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_current" & !names(acs) %like% "tech_skill|pc"]], acs[, .SD, .SDcols = names(acs)[names(acs) %like% "LV_ly" & !names(acs) %like% "tech_skill|pc"]] %>% setnames(., gsub("_ly", "_current", names(.)))))
+#   stats::kmeans(df, centers = k) -> temp
+#   
+#   # assign clusters
+#   acs[, kmeans_cluster_current := temp$cluster[1:nrow(acs)]]
+#   acs[, kmeans_cluster_ly := temp$cluster[(nrow(acs) + 1):(nrow(acs)*2)]]
+#   
+#   #
+#   # get matrix of means and compute distances between each cluster
+#   # geometric means
+#   centers <- temp$centers
+#   centers_long <- melt(centers)
+#   centers_long <- merge(centers_long, centers_long, by = "Var2", allow.Cartesian = T)
+#   centers_dist <- data.table(centers_long)[,.(geo_mean_dist = prod(abs(value.x - value.y)) ^ (1/length(value.x))),
+#                                            by = .(Var1.x, Var1.y)]
+#   setnames(centers_dist, c("kmeans_cluster_current", "kmeans_cluster_ly", "geo_mean_dist"))
+#   
+#   #
+#   acs[, geo_mean_dist := NULL]
+#   acs <- merge(acs, centers_dist, by = c("kmeans_cluster_current", "kmeans_cluster_ly"))
+#   
+#   #
+#   acs[, source_kmeans_N := .N, by = kmeans_cluster_ly]
+#   centers <- data.table(centers)
+#   centers[,total_skills := rowSums(.SD), .SDcols = names(centers)]
+#   
+#   acs[, kmeans_cluster_current := factor(kmeans_cluster_current, 
+#                                          levels = centers[, order(total_skills)])]
+#   acs[, kmeans_cluster_ly := factor(kmeans_cluster_ly, 
+#                                     levels = centers[, order(total_skills)])]
+#   
+#   
+#   gg <- acs[OCC10LY != OCC2010,.(N = .N, source_kmeans_N = unique(source_kmeans_N)),
+#             by= .(kmeans_cluster_current, kmeans_cluster_ly)] %>% 
+#     .[, total := sum(N), by = kmeans_cluster_ly] %>% 
+#     .[, prop := N/source_kmeans_N] %>% 
+#     .[N >= 10] %>% 
+#     ggplot()+
+#       geom_point(aes(y = (kmeans_cluster_current), x = (kmeans_cluster_ly), color = prop, size = N)) + 
+#   scale_color_viridis_c(trans = "log10") +
+#   scale_radius(trans = "log10")+
+#   geom_abline(yintercept = 0, slope = 1, color= "red") +
+#   scale_x_discrete(labels = centers[, order(total_skills)],
+#                    breaks = centers[, order(total_skills)], drop = F)+
+#   scale_y_discrete(labels = centers[, order(total_skills)],
+#                    breaks = centers[, order(total_skills)], drop = F)+
+#   theme(axis.text.x = element_text(angle = 90))
+#   
+#   print(gg)
+# 
+# }
 
 
 ```
@@ -700,7 +688,7 @@ for(k in seq(10,110,20)){
 
 ```{r}
 mod <- lm(log_incwage ~ as.factor(kmeans_cluster_current), acs[year == 1999])
-mod2 <- lm(log_incwage ~ as.factor(microocc_current), acs[year == 1999])
+mod2 <- lm(log_incwage ~ as.factor(mesoocc_current), acs[year == 1999])
 stats::AIC(mod2)
 stats::AIC(mod)
 ```
