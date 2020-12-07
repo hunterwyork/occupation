@@ -179,6 +179,9 @@ skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`
 acs[, OCC2010 := as.character(OCC2010)]
 
 #standardize occ2010 to match occ2019
+#this is due to a problem with the occ2010 var where a bunch of occs
+#shift from one occ to another in 2005, which doesn't happen in the occ
+#2019 var
 acs[,.(OCC2010, OCC1990)] %>% unique -> temp
 temp <- temp[!duplicated(temp$OCC2010)]
 skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
