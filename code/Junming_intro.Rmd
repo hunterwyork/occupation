@@ -1,0 +1,707 @@
+---
+title: "junming_intro"
+author: "Hunter York"
+date: "12/22/2020"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, include = T)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+
+
+options
+theme_set(theme_bw(base_size = 5)) 
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  sum.w2 <- sum(w^2)
+  mean.w <- sum(x * w) / sum(w)
+  (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                       na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/cps_00011.dta")
+# acs2 <- fread("../inputs/cps_00008.csv")
+# acs <- cbind(acs, acs2[,.(OCC2010, OCC1990,OCC1950, OCC, OCCLY,OCC50LY, OCC90LY, OCC10LY, HOURWAGE)])
+# acs <- acs[acs$empstat == "at work" &
+#                              (acs$schlcoll %like% "does not attend|niu"| is.na(acs$schlcoll)) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork1 >= 30 &
+#                              acs$incwage != 99999999 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+#keep vars
+# acs <- acs[,.(race,relate,serial, hispan, year,asecwt, sex, age, schlcoll,educ, empstat,OCC,OCC2010,OCC1990, ind,ind1990, classwkr, ahrsworkt,wkswork1, uhrsworkly,classwly,workly,OCCLY,indly,OCC90LY,OCC1950, OCC50LY,ind90ly,OCC10LY, incwage, HOURWAGE,whymove, strechlk, whyptly)]
+
+# subset
+
+
+#saveRDS(acs, "../inputs/cps_00010.rds")
+acs <- readRDS( "../inputs/cps_00010.rds")
+
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+acs[, log_incwage := log(incwage + 1)]
+
+#
+#acs <- acs[year %in% seq(1990,1999,3)]
+
+# load occ_soc xwalk
+occ_xwalk <- data.table(read_excel("../ref/nem-occcode-cps-crosswalk.xlsx"))
+names(occ_xwalk) <- occ_xwalk[4,] %>% unlist()
+occ_xwalk <- occ_xwalk[-(1:4),]
+occ_xwalk[, OCCSOC := gsub("-", "", `Hybrid SOC Code`)]
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+skills[, Element.Name := paste0("skl_", Element.Name)]
+# add abilities
+abilities_2009 <- read.delim('../ref/db_14_0 2009.7/Abilities.txt') %>% data.table()
+abilities_2013 <-  read.delim('../ref/db_18_0_2013.7/Abilities.txt') %>% data.table()
+abilities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Abilities.xlsx") %>% data.table()
+abilities_2009[, year := 2009]
+abilities_2013[, year := 2013]
+abilities_2018[, year := 2018]
+setnames(abilities_2018, names(abilities_2018), gsub(" ", ".", names(abilities_2018), fixed = T))
+abilities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+abilities <- rbindlist(list(abilities_2009, abilities_2013, abilities_2018), fill = T)
+abilities <- abilities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+abilities[, Element.Name := paste0("abl_", Element.Name)]
+
+# add knowledge
+knowledge_2009 <- read.delim('../ref/db_14_0 2009.7/Knowledge.txt') %>% data.table()
+knowledge_2013 <-  read.delim('../ref/db_18_0_2013.7/Knowledge.txt') %>% data.table()
+knowledge_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Knowledge.xlsx") %>% data.table()
+knowledge_2009[, year := 2009]
+knowledge_2013[, year := 2013]
+knowledge_2018[, year := 2018]
+setnames(knowledge_2018, names(knowledge_2018), gsub(" ", ".", names(knowledge_2018), fixed = T))
+knowledge_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+knowledge <- rbindlist(list(knowledge_2009, knowledge_2013, knowledge_2018), fill = T)
+knowledge <- knowledge[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+knowledge[, Element.Name := paste0("knl_", Element.Name)]
+
+# add work activities
+workactivities_2009 <- read.delim('../ref/db_14_0 2009.7/Work Activities.txt') %>% data.table()
+workactivities_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Activities.txt') %>% data.table()
+workactivities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Activities.xlsx") %>% data.table()
+workactivities_2009[, year := 2009]
+workactivities_2013[, year := 2013]
+workactivities_2018[, year := 2018]
+setnames(workactivities_2018, names(workactivities_2018), gsub(" ", ".", names(workactivities_2018), fixed = T))
+workactivities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workactivities <- rbindlist(list(workactivities_2009, workactivities_2013, workactivities_2018), fill = T)
+workactivities <- workactivities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workactivities[, Element.Name := paste0("act_", Element.Name)]
+
+# add work styles
+workstyles_2009 <- read.delim('../ref/db_14_0 2009.7/Work Styles.txt') %>% data.table()
+workstyles_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Styles.txt') %>% data.table()
+workstyles_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Styles.xlsx") %>% data.table()
+workstyles_2009[, year := 2009]
+workstyles_2013[, year := 2013]
+workstyles_2018[, year := 2018]
+setnames(workstyles_2018, names(workstyles_2018), gsub(" ", ".", names(workstyles_2018), fixed = T))
+workstyles_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workstyles <- rbindlist(list(workstyles_2009, workstyles_2013, workstyles_2018), fill = T)
+workstyles <- workstyles[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workstyles[, Element.Name := paste0("sty_", Element.Name)]
+
+#
+skills <- rbindlist(list(skills, knowledge, abilities, workstyles, workactivities), fill = T)
+
+# standardize
+skills[Scale.ID == "LV", Data.Value := Data.Value/7]
+skills[Scale.ID == "IM", Data.Value := (Data.Value-1)/4]
+skills[Element.Name %like% "sty", Scale.ID := "LV"]
+#
+skills <- skills[Scale.ID == "LV"]
+# reformate onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+skills <- skills[,.(Data.Value = mean(Data.Value),
+                    Standard.Error = mean(as.numeric(Standard.Error))), by = .(Element.Name,Scale.ID, OCCSOC)]
+
+# chack to see which occ codes are missing
+occ_xwalk[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+
+# 
+skills[, Element.Name := paste0(Element.Name, ".", Scale.ID)]
+skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+skills <- skills[OCCSOC != 152091]
+skills_wide <- dcast(skills, OCCSOC   ~Element.Name, value.var = "Data.Value")
+res.pca <- prcomp(skills_wide[,-1], scale = TRUE, center = T)
+
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, pc1 := predict(res.pca, newdata = .SD)[,1], .SDcols = names(skills_sum)]
+skills_sum[, pc2 := predict(res.pca, newdata = .SD)[,2], .SDcols = names(skills_sum)]
+skills_sum[, pc3 := predict(res.pca, newdata = .SD)[,3], .SDcols = names(skills_sum)]
+skills_sum[, pc4 := predict(res.pca, newdata = .SD)[,4], .SDcols = names(skills_sum)]
+skills_sum[, pc5 := predict(res.pca, newdata = .SD)[,5], .SDcols = names(skills_sum)]
+skills_sum[, pc6 := predict(res.pca, newdata = .SD)[,6], .SDcols = names(skills_sum)]
+skills_sum[, pc7 := predict(res.pca, newdata = .SD)[,7], .SDcols = names(skills_sum)]
+skills_sum[, pc8 := predict(res.pca, newdata = .SD)[,8], .SDcols = names(skills_sum)]
+skills_sum[, pc9 := predict(res.pca, newdata = .SD)[,9], .SDcols = names(skills_sum)]
+skills_sum[, pc10 := predict(res.pca, newdata = .SD)[,10], .SDcols = names(skills_sum)]
+skills_sum[, pc11 := predict(res.pca, newdata = .SD)[,11], .SDcols = names(skills_sum)]
+skills_sum[, pc12 := predict(res.pca, newdata = .SD)[,12], .SDcols = names(skills_sum)]
+skills_sum[, pc13 := predict(res.pca, newdata = .SD)[,13], .SDcols = names(skills_sum)]
+skills_sum[, pc14 := predict(res.pca, newdata = .SD)[,14], .SDcols = names(skills_sum)]
+skills_sum[, pc15 := predict(res.pca, newdata = .SD)[,15], .SDcols = names(skills_sum)]
+skills_sum[, pc16 := predict(res.pca, newdata = .SD)[,16], .SDcols = names(skills_sum)]
+skills_sum[, pc17 := predict(res.pca, newdata = .SD)[,17], .SDcols = names(skills_sum)]
+skills_sum[, pc18 := predict(res.pca, newdata = .SD)[,18], .SDcols = names(skills_sum)]
+skills_sum[, pc19 := predict(res.pca, newdata = .SD)[,19], .SDcols = names(skills_sum)]
+skills_sum[, pc20 := predict(res.pca, newdata = .SD)[,20], .SDcols = names(skills_sum)]
+skills_sum[, pc21 := predict(res.pca, newdata = .SD)[,21], .SDcols = names(skills_sum)]
+skills_sum[, pc22 := predict(res.pca, newdata = .SD)[,22], .SDcols = names(skills_sum)]
+skills_sum[, pc23 := predict(res.pca, newdata = .SD)[,23], .SDcols = names(skills_sum)]
+skills_sum[, pc24 := predict(res.pca, newdata = .SD)[,24], .SDcols = names(skills_sum)]
+skills_sum[, pc25 := predict(res.pca, newdata = .SD)[,25], .SDcols = names(skills_sum)]
+
+# skills_sum[, skl_tech_skill.LV := skl_Programming.LV + `skl_Complex Problem Solving.LV` +
+#              `skl_Mathematics.LV`  + skl_Science.LV + `skl_Systems Analysis.LV` + 
+#              skl_Troubleshooting.LV]
+# skills_sum[, skl_tech_skill.IM := skl_Programming.IM + `skl_Complex Problem Solving.IM` +
+#              `skl_Mathematics.IM`  + skl_Science.IM + `skl_Systems Analysis.IM` + 
+#              skl_Troubleshooting.IM]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "skl"]]
+skills_sum[, average_value_abilities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "abl"]]
+skills_sum[, average_value_knowledge := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "knl"]]
+skills_sum[, average_value_workstyles := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "sty"]]
+skills_sum[, average_value_activities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "act"]]
+
+skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
+
+# collapse to OCCSOC
+vars <- names(skills_wide)[-1]
+skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
+acs[, OCC2010 := as.character(OCC2010)]
+
+#standardize occ2010 to match occ2019
+#this is due to a problem with the occ2010 var where a bunch of occs
+#shift from one occ to another in 2005, which doesn't happen in the occ
+#2019 var
+acs[,.(OCC2010, OCC1990)] %>% unique -> temp
+temp <- temp[!duplicated(temp$OCC2010)]
+skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
+vars_temp <- names(skills_final)[!names(skills_final) %like% "CPS|OCC"]
+skills_final[, (vars_temp) := lapply(.SD, mean, na.rm = T), by = OCC1990, .SDcols = vars_temp]
+skills_final[,OCC1990 := NULL]
+
+#clean up memory
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var", "skills_final", "res.pca")])
+
+acs[, OCC10LY := as.character(OCC10LY)]
+
+skills_final[, OCC2010 := `CPS Code`]
+df <- skills_final[!duplicated(skills_final$OCC2010), .SD, .SDcols = names(skills_final)[names(skills_final) %like% "skl|knl|abl|act|sty|pc|OCC2010" & names(skills_final) %like% "pc|OCC2010"]]
+df_occ <- df[,OCC2010]
+df[, OCC2010 := NULL]
+df <- df[,.(pc1, pc2, pc3, pc4, pc5, pc6, pc7, pc8, pc9, pc10, pc11, pc12, pc13, pc14, pc15, pc16, pc17,
+            pc18, pc19, pc20, pc21, pc22, pc23, pc24, pc25)]
+
+
+
+c(120, 67, 9, 4) -> k_cand
+acs[, OCC10LY := as.character(OCC10LY)]
+
+for(k in k_cand[1]){
+  stats::kmeans(df, centers = k, iter.max = 30) -> temp2
+  df_temp2 <- data.table(OCC2010 = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp2, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_current"))
+  df_temp2[, paste0("kmeans_nested_cluster_", k, "_current") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                       ",")]
+  acs <- merge(acs, df_temp2, by = "OCC2010")
+  
+  df_temp3 <- data.table(OCC10LY = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp3, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_ly"))
+  df_temp3[, paste0("kmeans_nested_cluster_", k, "_ly") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                                  ",")]
+  
+  acs <- merge(acs, df_temp3, by = "OCC10LY")
+  
+  
+  centers <- temp2$centers
+  
+  melt(centers) %>% data.table() %>% .[,.(value = value[Var2 == "pc1"]), by = Var1] %>% .[order(value, decreasing = T), Var1] %>% .[1] -> high_skill
+  
+  centers_long <- melt(centers)
+  centers_long <- data.table(centers_long)
+  centers_long[, Var1 := paste0(",", Var1, ",")]
+  centers_long <- merge(centers_long, centers_long, by = "Var2", allow.cartesian = T)
+  centers_dist <- data.table(centers_long)[,.(geo_mean_dist = mean(abs(value.x - value.y))),
+                                           by = .(Var1.x, Var1.y)]
+  setnames(centers_dist, c(paste0("kmeans_nested_cluster_", k, "_current"), 
+                           paste0("kmeans_nested_cluster_", k, "_ly"), paste0("geo_nested_means_", k, "_dist")))
+  
+  # create vectors of nearest neighbors
+  for(k_temp in paste0(",", 1:k, ",")){
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp] %>% 
+      .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+      .[,get(paste0("kmeans_nested_cluster_", k, "_current"))] %>% 
+      .[1:3] %>% 
+      paste0(., collapse = "|") -> tempp
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp,
+                 paste0("kmeans_nested_cluster_rank_3_", k, "_conc"):= 
+                   ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) %like% tempp, 1,0) ]
+  }
+  
+  
+  
+  #
+  acs <- merge(acs, centers_dist, by = c(paste0("kmeans_nested_cluster_", k, "_current"),
+                                         paste0("kmeans_nested_cluster_", k, "_ly")))
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_ly") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_ly") :=
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  
+  acs[,paste0("kmeans_nested_cluster_", k, "_conc") := ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) == 
+                                                                get(paste0("kmeans_nested_cluster_", k, "_ly")),1,0)]
+  
+  acs[, paste0("source_kmeans_nested_", k, "_N") := .N, by = get(paste0("kmeans_nested_cluster_", k, "_ly"))]
+  
+  acs[, paste0("kmeans_nested_cluster_", k, "_current") := factor(get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                  levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                                    .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                                    .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  acs[, paste0("kmeans_nested_cluster_", k, "_ly") := factor(get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                             levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                               .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                               .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  
+}
+
+df <- temp2$centers
+df_occ <- rownames(temp2$centers)
+
+for(i in 2:4){
+  k <- k_cand[i]
+  k_prev <- k_cand[(i - 1)]
+  stats::kmeans(df, centers = k, iter.max = 30) -> temp2
+  df_temp2 <- data.table(OCC2010 = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp2, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_current"))
+  setnames(df_temp2, "OCC2010", paste0("kmeans_nested_cluster_", k_prev, "_current"))
+  
+  df_temp2[, paste0("kmeans_nested_cluster_", k, "_current") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                       ",")]
+  df_temp2[,  paste0("kmeans_nested_cluster_", k_prev, "_current") := factor(get( paste0("kmeans_nested_cluster_", k_prev, "_current")), levels = acs[,levels(get( paste0("kmeans_nested_cluster_", k_prev, "_current")))])]
+  acs <- merge(acs, df_temp2, by =  paste0("kmeans_nested_cluster_", k_prev, "_current"))
+  
+  df_temp3 <- data.table(OCC10LY = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp3, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_ly"))
+  setnames(df_temp3, "OCC10LY", paste0("kmeans_nested_cluster_", k_prev, "_ly"))
+  
+  df_temp3[, paste0("kmeans_nested_cluster_", k, "_ly") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                                  ",")]
+  df_temp3[,  paste0("kmeans_nested_cluster_", k_prev, "_ly") := factor(get( paste0("kmeans_nested_cluster_", k_prev, "_ly")), levels = acs[,levels(get( paste0("kmeans_nested_cluster_", k_prev, "_current")))])]
+  
+  acs <- merge(acs, df_temp3, by = paste0("kmeans_nested_cluster_", k_prev, "_ly"))
+  
+  
+  centers <- temp2$centers
+  
+  melt(centers) %>% data.table() %>% .[,.(value = value[Var2 == "pc1"]), by = Var1] %>% .[order(value, decreasing = T), Var1] %>% .[1] -> high_skill
+  
+  centers_long <- melt(centers)
+  centers_long <- data.table(centers_long)
+  centers_long[, Var1 := paste0(",", Var1, ",")]
+  centers_long <- merge(centers_long, centers_long, by = "Var2", allow.cartesian = T)
+  centers_dist <- data.table(centers_long)[,.(geo_mean_dist = mean(abs(value.x - value.y))),
+                                           by = .(Var1.x, Var1.y)]
+  setnames(centers_dist, c(paste0("kmeans_nested_cluster_", k, "_current"), 
+                           paste0("kmeans_nested_cluster_", k, "_ly"), paste0("geo_nested_means_", k, "_dist")))
+  
+  # create vectors of nearest neighbors
+  for(k_temp in paste0(",", 1:k, ",")){
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp] %>% 
+      .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+      .[,get(paste0("kmeans_nested_cluster_", k, "_current"))] %>% 
+      .[1:3] %>% 
+      paste0(., collapse = "|") -> tempp
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp,
+                 paste0("kmeans_nested_cluster_rank_3_", k, "_conc"):= 
+                   ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) %like% tempp, 1,0) ]
+  }
+  
+  
+  
+  #
+  acs <- merge(acs, centers_dist, by = c(paste0("kmeans_nested_cluster_", k, "_current"),
+                                         paste0("kmeans_nested_cluster_", k, "_ly")))
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_ly") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_ly") :=
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  
+  acs[,paste0("kmeans_nested_cluster_", k, "_conc") := ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) == 
+                                                                get(paste0("kmeans_nested_cluster_", k, "_ly")),1,0)]
+  
+  acs[, paste0("source_kmeans_nested_", k, "_N") := .N, by = get(paste0("kmeans_nested_cluster_", k, "_ly"))]
+  
+  acs[, paste0("kmeans_nested_cluster_", k, "_current") := factor(get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                  levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                                    .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                                    .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  acs[, paste0("kmeans_nested_cluster_", k, "_ly") := factor(get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                             levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                               .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                               .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  
+  df <- temp2$centers
+  df_occ <- rownames(temp2$centers)
+  
+}
+
+### do some post processing to relabel the nested groups to make that more apparent
+### 120
+levels(acs$kmeans_nested_cluster_120_ly) -> levs
+acs[, kmeans_nested_cluster_120_ly := paste(kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly,
+                                            kmeans_nested_cluster_67_ly,kmeans_nested_cluster_120_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_120_ly) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_120_ly := factor(kmeans_nested_cluster_120_ly, levels = 
+                                               unique(acs$kmeans_nested_cluster_120_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_120_current) -> levs
+acs[, kmeans_nested_cluster_120_current := paste(kmeans_nested_cluster_4_current, kmeans_nested_cluster_9_current,
+                                                 kmeans_nested_cluster_67_current, kmeans_nested_cluster_120_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_120_current) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_120_current := factor(kmeans_nested_cluster_120_current, levels = 
+                                                    unique(acs$kmeans_nested_cluster_120_current)[temp] )]
+### 67
+levels(acs$kmeans_nested_cluster_67_ly) -> levs
+acs[, kmeans_nested_cluster_67_ly := paste(kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly,
+                                           kmeans_nested_cluster_67_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_67_ly) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_67_ly := factor(kmeans_nested_cluster_67_ly, levels = 
+                                              unique(acs$kmeans_nested_cluster_67_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_67_current) -> levs
+acs[, kmeans_nested_cluster_67_current := paste(kmeans_nested_cluster_4_current, kmeans_nested_cluster_9_current,
+                                                kmeans_nested_cluster_67_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_67_current) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_67_current := factor(kmeans_nested_cluster_67_current, levels = 
+                                                   unique(acs$kmeans_nested_cluster_67_current)[temp] )]
+
+### 9
+levels(acs$kmeans_nested_cluster_9_ly) -> levs
+acs[, kmeans_nested_cluster_9_ly := paste(kmeans_nested_cluster_4_ly,
+                                          kmeans_nested_cluster_9_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_9_ly) %>% 
+  tstrsplit(., "_", keep =2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_9_ly := factor(kmeans_nested_cluster_9_ly, levels = 
+                                             unique(acs$kmeans_nested_cluster_9_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_9_current) -> levs
+acs[, kmeans_nested_cluster_9_current := paste(kmeans_nested_cluster_4_current,
+                                               kmeans_nested_cluster_9_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_9_current) %>% 
+  tstrsplit(., "_", keep = 2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_9_current := factor(kmeans_nested_cluster_9_current, levels = 
+                                                  unique(acs$kmeans_nested_cluster_9_current)[temp] )]
+
+
+
+```
+
+# Introduction
+
+This document contains an explanatory sketch of what we have done so far and what we would like to do.
+
+The first dataset in question is the ONET database on occupation skills, work activities, knowledge domains, abilities, and work styles. Each occupation contains 179 metrics for the five domains, each originally on a scale from 1-6, but I have rescaled them linearly to lie between 0 and 1. These data primarily come from surveys and direct observation and are each associated with a standard error derived from the correspondance between observers. For now, these standard errors are not used, but they could be going forward. There are 424 occupations with 179 metrics, resulting in a matrix with those dimensions.
+
+The second data is the current population survey (CPS) yearly economic supplement. This survey asks each participant if they have moved occupations in the previous year, and if so, what occupation they currently and previously held. We aim to use these data to track movement between occupations with the goal of describing how rigid the labor market is. This data is key to checking any class structures informed by the ONET data (or any other source of class structure data). Over a 30-year period, there are about 1,460,000 data points, of which about 100,000 moved jobs in the previous year. For these job-movers, we have supplementary information such as income, basic demographic data, education data, etc. 
+
+The two datasets can be merged (though imperfectly at this point) since CPS codes do not perfectly correspond with ONET codes. That's something we're working on separately. For now, about 90% of the data is mergeable, and this is what we have used in analyses thus far. 
+
+The preliminary goal is to use a data-driven method to create class structures that describe the suite of occupations in the CPS data. There have been few attempts to do this thus far. One of our colleagues, Siwei Cheng at NYU, has just submitted a paper that exclusively uses the CPS data in a network analysis to track flows between occupations so as to describe class structure. An alternative less-data driven attempt to describe class structure is detailed by [Weeden and Grusky](https://www.journals.uchicago.edu/doi/full/10.1086/428815?casa_token=GhHpFZDJjPgAAAAA%3A_LedrGkWyzlRl0P98yZ1on60ODMWzAcqOfmnbE2VNjaGYt8K_3NQxyDqsvbYLqM0rvOMuS_Vgl8#_i7). 
+
+# Previous Work
+
+A quick first pass has been done using the the ONET data only to create some categorical groupings. No CPS data is used in this model. Instead, the matrix of jobs and skills, activities, abilities, knowledge, and styles is used with a k-means clustering algorithm to create K groupings. Due to the high multicollinearity between the many variables in the ONET database, the skills are first reduced to 25 principle components before being fed into the kmeans model. The kmeans model is run with k = 120, 67, 9 and 4 in order to reflect some different, established class aggregation schemes. (120 and 67 refer to microclass schemes), 9 to [mesoclass](https://www.sciencedirect.com/science/article/abs/pii/0049089X75900022) schemes, and 4 to macroclass (Erikson-Goldthorpe) schemes.
+
+The below graph shows how an ONET-based class system captures closure in the class system with movements between occupations in the CPS data used to display performance of the ONET-based class system.
+
+## Figure 1
+
+```{r}
+
+
+k <- 67
+levs <- acs[, levels(get(paste0("kmeans_nested_cluster_", k, "_current")))]
+dt <- data.table(x = sort(levs))
+dt <- cbind(dt, dt[,tstrsplit(x, "_")])
+dt[, x := 1:67]
+dt1 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V1]
+dt2 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V2]
+
+acs[OCC90LY != OCC1990,.(N = .N, source_kmeans_N = unique(get(paste0("source_kmeans_nested_", k, "_N") ))),
+    by= .(get(paste0("kmeans_nested_cluster_", k, "_current")), get(paste0("kmeans_nested_cluster_", k, "_ly")))] %>% 
+  .[, total := sum(N), by = get.1] %>% 
+  .[, prop := N/total] %>% 
+  .[N >= 10] %>% 
+  .[, get := as.numeric(factor(as.character(get), levels = sort(levs)))] %>% 
+    .[, get.1 := as.numeric(factor(as.character(get.1), levels = sort(levs)))] %>% 
+
+  ggplot() + 
+  geom_point(aes(y = get,
+                 x = get.1, color = total, size = prop), shape = 1, stroke = 1) + 
+  scale_color_viridis_c(trans = "log10", direction = -1) +
+  scale_radius(range = c(.1, 15), )+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text = element_text(size = 5)) + 
+  scale_y_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  scale_x_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  coord_cartesian(xlim = c(1, length(levs)), ylim = c(1,length(levs)))+
+  ggtitle(paste0("K = ", k)) +
+  labs(title = "Source and Sink Classes (K = 67)\nSuperimposed with  K=9 and K=4 Groupings",
+       x = "Class Last Year",
+       y = "Class Current Year",
+       color = "Total Number\nin Source Class",
+       size = "Proportion of\nClass Movers") +
+  geom_rect(data = dt1, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "blue", fill = NA) + 
+    geom_rect(data = dt2, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "red", fill = NA)-> gg
+print(gg)
+```
+
+## Figure 2
+
+```{r}
+
+k <- 120
+levs <- acs[, levels(get(paste0("kmeans_nested_cluster_", k, "_current")))]
+dt <- data.table(x = sort(levs))
+dt <- cbind(dt, dt[,tstrsplit(x, "_")])
+dt[, x := 1:120]
+dt1 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V1]
+dt2 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V2]
+dt3 <- dt[,.(minx = min(x), 
+             maxx = max(x),
+             mid = median(x)), by = V3]
+
+acs[OCC90LY != OCC1990,.(N = .N, source_kmeans_N = unique(get(paste0("source_kmeans_nested_", k, "_N") ))),
+    by= .(get(paste0("kmeans_nested_cluster_", k, "_current")), get(paste0("kmeans_nested_cluster_", k, "_ly")))] %>% 
+  .[, total := sum(N), by = get.1] %>% 
+  .[, prop := N/total] %>% 
+  .[N >= 10] %>% 
+  .[, get := as.numeric(factor(as.character(get), levels = sort(levs)))] %>% 
+    .[, get.1 := as.numeric(factor(as.character(get.1), levels = sort(levs)))] %>% 
+
+  ggplot() + 
+  geom_point(aes(y = get,
+                 x = get.1, color = total, size = prop), shape = 1, stroke = 1) + 
+  scale_color_viridis_c(trans = "log10", direction = -1) +
+  scale_radius(range = c(.1, 15), )+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text = element_text(size = 5)) + 
+  scale_y_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  scale_x_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  coord_cartesian(xlim = c(1, length(levs)), ylim = c(1,length(levs)))+
+  ggtitle(paste0("K = ", k)) +
+  labs(title = "Source and Sink Classes (K = 120)\nSuperimposed with K = 67, K=9 and K=4 Groupings",
+       x = "Class Last Year",
+       y = "Class Current Year",
+       color = "Total Number\nin Source Class",
+       size = "Proportion of\nClass Movers") +
+  geom_rect(data = dt1, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "blue", fill = NA) + 
+    geom_rect(data = dt2, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "red", fill = NA) +
+  geom_rect(data = dt3, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "hot pink", fill = NA)-> gg
+print(gg)
+```
+
+\newpage
+
+## Table 1
+
+We can also compare how this system compares to the traditional micro-, meso-, and macro-class schemes. The below table shows how well each classification scheme tracks movements between classes. The numbers in each cell are the % of job movers who stay in the same class when they move jobs.
+
+Importantly, the microclass performance is about even between the naive and data-driven models. Unfortunately, the aggregations into meso- and macro-classes is less good. However, we believe that using CPS data to inform the model could improve these statistics. I see away to do that with my kmeans clustering model, but Prof. Xie and I agree that we may as well implement a more flexible model sooner than later. 
+
+Thus, our goal is to optimize performance using the metrics below (or similar metrics) such that a skills-based model is able to classify occupations into a class structure that outperforms a naive or qualitative method of class structure like that used in previous research.
+
+A critical component of the model must be that the classes nest (i.e. K  = 67 nests into k = 9 nests into k = 4). That said, the specific Ks are up to our choosing, and I would even like to have the choice of K be data driven. Siwei achieved this with her method, and with her permission I can share her paper in progress with you. However, as degrees of freedom change (as K changes), obviously our ability to compare to traditional class systems is limited, since that complicates our comparison metrics.
+
+```{r, results = "asis"}
+# cheng xwalk
+cheng <- data.table(readstata13::read.dta13("../ref/occ1950_mc_xwalk_70.dta"))
+cheng[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# occ50 recode
+occ50_recode <- fread("../ref/occ1950_recode.csv")
+occ50_recode <- occ50_recode[,1:2]
+names(occ50_recode) <- unlist(occ50_recode[1, ])
+occ50_recode <- occ50_recode[-1,]
+occ50_recode <- occ50_recode[!is.na(as.numeric(occ1950_num))]
+occ50_recode[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# merge
+cheng <- merge(cheng, occ50_recode[,.(occ1950, occ1950_num)], all.x = T)
+
+#fix the stragglers
+fix <- cheng[is.na(occ1950_num)]
+candidates <- occ50_recode[!occ1950 %in% cheng$occ1950]
+
+for(c.fix in 1:nrow(fix)){
+  goal <- substr(fix[c.fix, occ1950],1,7)
+  new <- candidates[candidates$occ1950 %like% goal, occ1950_num]
+  if(length(new) == 1){fix[c.fix, new_occ1950_num := new]}
+}
+
+
+fix[is.na(new_occ1950_num), new_occ1950_num := c(43, 34, 44, 603, 16, 46, 605,94, 19,48,69,84,26,23,27,29)]
+
+cheng <- merge(cheng, fix[,.(occ1950, new_occ1950_num)], by = "occ1950", all.x = T)
+cheng[is.na(occ1950_num), occ1950_num := new_occ1950_num]
+cheng[, occ1950_num := as.numeric(occ1950_num)]
+cheng[, new_occ1950_num := NULL]
+setnames(cheng, "occ1950_num", "OCC1950")
+cheng[, occ1950 := NULL]
+
+factorr <- function(x){ifelse(is.character(x), return(factor(x)), return(x))}
+cheng[,names(cheng) := lapply(.SD, factorr), .SDcols = names(cheng)]
+
+
+#acs <- merge(acs, cheng, by.x = "OCC1950", by.y = "occ1950_num", all.x = T)
+acs <- acs[cheng, on = "OCC1950"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_current"))
+
+setnames(cheng, "OCC1950", "OCC50LY")
+
+acs <- acs[cheng, on = "OCC50LY"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_ly"))
+
+# loop over scheme and calculate concordance
+for(c.scheme in  c( "mesoocc", "macroocc", "microocc")){
+  acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
+}
+
+acs <- acs[!is.na(OCC2010)]
+
+num_correct <- acs[OCC1950 != OCC50LY & !is.na(kmeans_nested_cluster_67_current),
+                   colSums(.SD, na.rm = T), .SDcols = names(acs)[names(acs) %like% "conc"]]
+total <- acs[OCC1950 != OCC50LY , nrow(.SD)]
+num_correct <- num_correct/total
+num_cats <- acs[OCC1950 != OCC50LY, lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly"]]
+
+num_correct[names(num_correct) %like% "meso|macro|micro|4_|9_|67_"] -> out
+out <- melt(out) %>% data.table(., keep.rownames = T)
+out <- out[!rn %like% "rank"]
+out[,id := c(3,2,1,2,1,3)]
+out[,method := c(
+                 rep("Nested ONET-Based",3),
+                 rep("Traditional",3))]
+out <- dcast(out, method ~ id)
+setnames(out, c("Method", "Macro (4)", "Meso (9)", "Micro (67)"))
+xtable::xtable(out)
+
+
+```
+
+
+## Table 2
+
+Below, you'll find what occupatiosn end up in what classes based on our ONET-based method.
+
+```{r, results = 'asis'}
+acs[,.(OCC2010, kmeans_nested_cluster_120_current, kmeans_nested_cluster_67_current, kmeans_nested_cluster_9_current, kmeans_nested_cluster_4_current)] %>% unique() -> jobs
+jobs <- merge(jobs, skills_final[,.(`CPS Occupational Title`, `CPS Code`)], 
+              by.x = "OCC2010", by.y = "CPS Code")
+jobs[, `CPS Occupational Title` := substr(`CPS Occupational Title`,1,30)]
+jobs <- jobs[jobs[order(kmeans_nested_cluster_4_current, 
+                        kmeans_nested_cluster_9_current, kmeans_nested_cluster_67_current, kmeans_nested_cluster_120_current)],
+             .(`CPS Occupational Title`, kmeans_nested_cluster_120_current,
+               kmeans_nested_cluster_67_current, kmeans_nested_cluster_9_current,
+               kmeans_nested_cluster_4_current)]
+setnames(jobs, c("Title", "Class_120", "Class_67", "Class_9", "Class_4"))
+options(xtable.comment = FALSE)
+for(i in 1:ceiling(nrow(jobs)/50)){
+  cat("\n") 
+  print(
+    xtable::xtable(jobs[(0 + (50 * (i - 1))):(1 + (50 * (i)))], caption = NULL)
+  )
+  
+  cat("\n")
+}
+
+## prepare data for junming
+write.csv(skills_final, "/Users/hyork/Documents/projects/occupation/ref/skills_final.csv")
+write.csv(acs[,.(OCC10LY, OCC2010, incwage, 
+                 log_incwage,kmeans_nested_cluster_4_current,
+                 kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly, 
+                 kmeans_nested_cluster_9_current, kmeans_nested_cluster_67_ly, 
+                 kmeans_nested_cluster_67_current, kmeans_nested_cluster_120_current,
+                 kmeans_nested_cluster_120_ly, mesoocc_current, mesoocc_ly,
+                 microocc_current, microocc_ly, macroocc_current, macroocc_ly)], "/Users/hyork/Documents/projects/occupation/ref/cps_trimmed.csv")
+
+```
+
+
+

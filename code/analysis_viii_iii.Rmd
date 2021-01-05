@@ -1,0 +1,750 @@
+---
+title: "analysis_viii_III"
+author: "Hunter York"
+date: "12/24/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, include = T)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+pc_n <- 80
+n <- 10000
+
+
+options
+theme_set(theme_bw(base_size = 5)) 
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  sum.w2 <- sum(w^2)
+  mean.w <- sum(x * w) / sum(w)
+  (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                       na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/cps_00011.dta")
+# acs2 <- fread("../inputs/cps_00008.csv")
+# acs <- cbind(acs, acs2[,.(OCC2010, OCC1990,OCC1950, OCC, OCCLY,OCC50LY, OCC90LY, OCC10LY, HOURWAGE)])
+# acs <- acs[acs$empstat == "at work" &
+#                              (acs$schlcoll %like% "does not attend|niu"| is.na(acs$schlcoll)) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork1 >= 30 &
+#                              acs$incwage != 99999999 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+#keep vars
+# acs <- acs[,.(race,relate,serial, hispan, year,asecwt, sex, age, schlcoll,educ, empstat,OCC,OCC2010,OCC1990, ind,ind1990, classwkr, ahrsworkt,wkswork1, uhrsworkly,classwly,workly,OCCLY,indly,OCC90LY,OCC1950, OCC50LY,ind90ly,OCC10LY, incwage, HOURWAGE,whymove, strechlk, whyptly)]
+
+# subset
+
+
+#saveRDS(acs, "../inputs/cps_00010.rds")
+acs <- readRDS( "../inputs/cps_00010.rds")
+
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+acs[, log_incwage := log(incwage + 1)]
+
+#
+#acs <- acs[year %in% seq(1990,1999,3)]
+
+# load occ_soc xwalk
+occ_xwalk <- data.table(read_excel("../ref/nem-occcode-cps-crosswalk.xlsx"))
+names(occ_xwalk) <- occ_xwalk[4,] %>% unlist()
+occ_xwalk <- occ_xwalk[-(1:4),]
+occ_xwalk[, OCCSOC := gsub("-", "", `Hybrid SOC Code`)]
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+skills[, Element.Name := paste0("skl_", Element.Name)]
+# add abilities
+abilities_2009 <- read.delim('../ref/db_14_0 2009.7/Abilities.txt') %>% data.table()
+abilities_2013 <-  read.delim('../ref/db_18_0_2013.7/Abilities.txt') %>% data.table()
+abilities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Abilities.xlsx") %>% data.table()
+abilities_2009[, year := 2009]
+abilities_2013[, year := 2013]
+abilities_2018[, year := 2018]
+setnames(abilities_2018, names(abilities_2018), gsub(" ", ".", names(abilities_2018), fixed = T))
+abilities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+abilities <- rbindlist(list(abilities_2009, abilities_2013, abilities_2018), fill = T)
+abilities <- abilities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+abilities[, Element.Name := paste0("abl_", Element.Name)]
+
+# add knowledge
+knowledge_2009 <- read.delim('../ref/db_14_0 2009.7/Knowledge.txt') %>% data.table()
+knowledge_2013 <-  read.delim('../ref/db_18_0_2013.7/Knowledge.txt') %>% data.table()
+knowledge_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Knowledge.xlsx") %>% data.table()
+knowledge_2009[, year := 2009]
+knowledge_2013[, year := 2013]
+knowledge_2018[, year := 2018]
+setnames(knowledge_2018, names(knowledge_2018), gsub(" ", ".", names(knowledge_2018), fixed = T))
+knowledge_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+knowledge <- rbindlist(list(knowledge_2009, knowledge_2013, knowledge_2018), fill = T)
+knowledge <- knowledge[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+knowledge[, Element.Name := paste0("knl_", Element.Name)]
+
+# add work activities
+workactivities_2009 <- read.delim('../ref/db_14_0 2009.7/Work Activities.txt') %>% data.table()
+workactivities_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Activities.txt') %>% data.table()
+workactivities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Activities.xlsx") %>% data.table()
+workactivities_2009[, year := 2009]
+workactivities_2013[, year := 2013]
+workactivities_2018[, year := 2018]
+setnames(workactivities_2018, names(workactivities_2018), gsub(" ", ".", names(workactivities_2018), fixed = T))
+workactivities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workactivities <- rbindlist(list(workactivities_2009, workactivities_2013, workactivities_2018), fill = T)
+workactivities <- workactivities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workactivities[, Element.Name := paste0("act_", Element.Name)]
+
+# add work styles
+workstyles_2009 <- read.delim('../ref/db_14_0 2009.7/Work Styles.txt') %>% data.table()
+workstyles_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Styles.txt') %>% data.table()
+workstyles_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Styles.xlsx") %>% data.table()
+workstyles_2009[, year := 2009]
+workstyles_2013[, year := 2013]
+workstyles_2018[, year := 2018]
+setnames(workstyles_2018, names(workstyles_2018), gsub(" ", ".", names(workstyles_2018), fixed = T))
+workstyles_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workstyles <- rbindlist(list(workstyles_2009, workstyles_2013, workstyles_2018), fill = T)
+workstyles <- workstyles[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workstyles[, Element.Name := paste0("sty_", Element.Name)]
+
+# add work context
+context_2009 <- read.delim('../ref/db_14_0 2009.7/Work Context.txt') %>% data.table()
+context_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Context.txt') %>% data.table()
+context_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Context.xlsx") %>% data.table()
+context_2009[, year := 2009]
+context_2013[, year := 2013]
+context_2018[, year := 2018]
+setnames(context_2018, names(context_2018), gsub(" ", ".", names(context_2018), fixed = T))
+context_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+context <- rbindlist(list(context_2009, context_2013, context_2018), fill = T)
+context <- context[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+context <- context[Scale.ID %in% c("CX", "CT")]
+context[, Element.Name := paste0("ctx_", Element.Name)]
+
+# add work values
+values_2009 <- read.delim('../ref/db_14_0 2009.7/Work Values.txt') %>% data.table()
+values_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Values.txt') %>% data.table()
+values_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Values.xlsx") %>% data.table()
+values_2009[, year := 2009]
+values_2013[, year := 2013]
+values_2018[, year := 2018]
+setnames(values_2018, names(values_2018), gsub(" ", ".", names(values_2018), fixed = T))
+values_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+values <- rbindlist(list(values_2009, values_2013, values_2018), fill = T)
+values <- values[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, year)]
+values <- values[Scale.ID %in% c("EX")]
+values[, Element.Name := paste0("vlu_", Element.Name)]
+
+# add education training, etc
+education_2009 <- read.delim('../ref/db_14_0 2009.7/Education, Training, and Experience.txt') %>% data.table()
+education_2013 <-  read.delim('../ref/db_18_0_2013.7/Education, Training, and Experience.txt') %>% data.table()
+education_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Education, Training, and Experience.xlsx") %>% data.table()
+education_2009[, year := 2009]
+education_2013[, year := 2013]
+education_2018[, year := 2018]
+setnames(education_2018, names(education_2018), gsub(" ", ".", names(education_2018), fixed = T))
+education_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+education <- rbindlist(list(education_2009, education_2013, education_2018), fill = T)
+education <- education[,.(Data.Value = stats::weighted.mean(Category, Data.Value)), by = .(O.NET.SOC.Code, Element.Name, Scale.ID, year)]
+education <- education[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, year)]
+education[, Element.Name := paste0("edu_", Element.Name)]
+
+
+# # add tasks
+# task_2009 <- read.delim('../ref/db_14_0 2009.7/Task Ratings.txt') %>% data.table()
+# task_2013 <-  read.delim('../ref/db_18_0_2013.7/Task Ratings.txt') %>% data.table()
+# task_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Task Ratings.xlsx") %>% data.table()
+# task_2009[, year := 2009]
+# task_2013[, year := 2013]
+# task_2018[, year := 2018]
+# setnames(task_2018, names(task_2018), gsub(" ", ".", names(task_2018), fixed = T))
+# task_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+# task <- rbindlist(list(task_2009, task_2013, task_2018), fill = T)
+# task <- task[, .(O.NET.SOC.Code, Task, Scale.ID, Data.Value, Standard.Error, year)]
+# task <- task[Scale.ID %in% c("IM")]
+# task[, Element.Name := paste0("tsk_", Task)]
+# task <- task[!is.na(Task)]
+#
+skills <- rbindlist(list(skills, knowledge, abilities, workstyles, 
+                         workactivities,context, values, education), fill = T)
+#skills <- rbindlist(list(skills, knowledge, abilities, workstyles, workactivities), fill = T)
+
+# standardize
+skills[Scale.ID == "LV", Data.Value := Data.Value/7]
+skills[Scale.ID == "EX", Data.Value := (Data.Value-1)/6]
+skills[Scale.ID == "IM", Data.Value := (Data.Value-1)/4]
+skills[Scale.ID == "CX", Data.Value := (Data.Value-1)/4]
+skills[Scale.ID == "CT", Data.Value := (Data.Value-1)/2]
+skills[Scale.ID == "RW", Data.Value := (Data.Value-1)/9]
+skills[Scale.ID == "PT", Data.Value := (Data.Value-1)/7]
+skills[Scale.ID == "OJ", Data.Value := (Data.Value-1)/7]
+skills[Scale.ID == "RL", Data.Value := (Data.Value-1)/11]
+
+skills[Element.Name %like% "sty_", Scale.ID := "LV"]
+skills[Element.Name %like% "ctx", Scale.ID := "LV"]
+skills[Element.Name %like% "vlu", Scale.ID := "LV"]
+skills[Element.Name %like% "edu_", Scale.ID := "LV"]
+
+#
+skills <- skills[Scale.ID == "LV"]
+# reformat onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+skills[, Standard.Error := as.numeric(Standard.Error)]
+skills <- skills[,.(Data.Value = mean(Data.Value),
+                    Standard.Error = mean((Standard.Error))), by = .(Element.Name,Scale.ID, OCCSOC)]
+
+
+# add income
+inc <- acs[,.(Data.Value = median(log_incwage)), by = OCC2010]
+inc[, OCC2010 := as.character(OCC2010)]
+inc <- merge(inc, occ_xwalk[,.(`CPS Code`, OCCSOC)], by.x = "OCC2010", by.y = "CPS Code")
+inc[,Element.Name := "inc_Scaled Median Log Income.LV"]
+inc[,Scale.ID := "LV"]
+inc[, Standard.Error := NA]
+inc[, OCC2010 := NULL]
+inc[, Data.Value := (Data.Value - 9)/3]
+inc <- inc[,.(Data.Value = mean(Data.Value), 
+              Standard.Error = mean(Standard.Error)), by = .(Element.Name, Scale.ID, OCCSOC)]
+skills <- rbind(skills, inc, fill = T)
+
+# chack to see which occ codes are missing
+occ_xwalk[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+
+# 
+skills[, Element.Name := paste0(Element.Name, ".", Scale.ID)]
+#skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+skills <- skills[OCCSOC != 152091]
+skills <- skills[!OCCSOC %in% skills[is.na(Data.Value)]$OCCSOC]
+skills_wide <- dcast(skills, OCCSOC   ~Element.Name, value.var = "Data.Value")
+skills_wide <- skills_wide[!OCCSOC %in% skills_wide[!complete.cases(skills_wide)]$OCCSOC]
+
+res.pca <- prcomp(skills_wide[,-1], scale = TRUE, center = T)
+
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, paste0("pc", 1:pc_n) := data.table(predict(res.pca, newdata = .SD)[,1:pc_n]), .SDcols = names(skills_sum)]
+
+
+# skills_sum[, skl_tech_skill.LV := skl_Programming.LV + `skl_Complex Problem Solving.LV` +
+#              `skl_Mathematics.LV`  + skl_Science.LV + `skl_Systems Analysis.LV` +
+#              skl_Troubleshooting.LV]
+# skills_sum[, skl_tech_skill.IM := skl_Programming.IM + `skl_Complex Problem Solving.IM` +
+#              `skl_Mathematics.IM`  + skl_Science.IM + `skl_Systems Analysis.IM` +
+#              skl_Troubleshooting.IM]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "skl"]]
+skills_sum[, average_value_abilities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "abl"]]
+skills_sum[, average_value_knowledge := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "knl"]]
+skills_sum[, average_value_workstyles := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "sty"]]
+skills_sum[, average_value_activities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "act"]]
+
+skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
+
+# collapse to OCCSOC
+vars <- names(skills_wide)[-1]
+skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
+acs[, OCC2010 := as.character(OCC2010)]
+
+
+#standardize occ2010 to match occ2019
+#this is due to a problem with the occ2010 var where a bunch of occs
+#shift from one occ to another in 2005, which doesn't happen in the occ
+#2019 var
+acs[,.(OCC2010, OCC1990)] %>% unique -> temp
+temp <- temp[!duplicated(temp$OCC2010)]
+skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
+vars_temp <- names(skills_final)[!names(skills_final) %like% "CPS|OCC"]
+skills_final[, (vars_temp) := lapply(.SD, mean, na.rm = T), by = OCC1990, .SDcols = vars_temp]
+skills_final[,OCC1990 := NULL]
+
+#clean up memory
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var", "skills_final", "res.pca", "pc_n", "n")])
+
+acs[, OCC10LY := as.character(OCC10LY)]
+
+skills_final[, OCC2010 := `CPS Code`]
+acs_temp <- copy(acs)
+
+
+acs <- copy(acs_temp)
+df <- skills_final[!duplicated(skills_final$OCC2010), .SD, .SDcols = names(skills_final)[names(skills_final) %like% "skl|knl|abl|act_|sty_|ctx_|vlu_|edu_|inc_|pc|OCC2010"]]
+df <- df[OCC2010 %in% acs[OCC2010 != OCC10LY, unique(OCC2010)] & 
+           OCC2010 %in% acs[OCC2010 != OCC10LY, unique(OCC10LY)] ]
+df_occ <- df[,OCC2010]
+df[, OCC2010 := NULL]
+df <- df[,.SD, .SDcols = paste0("pc", 1:pc_n)]
+
+
+
+c(120, 67, 9, 4) -> k_cand
+acs[, OCC10LY := as.character(OCC10LY)]
+
+acs_xwalk <- acs[,.(OCC2010, OCC1950)] %>% unique()
+
+acs <- acs[,.N, by = .(OCC2010, OCC10LY, OCC1950, OCC50LY)]
+
+
+k_er_1 <- function(c.df_occ, c.df, c.k, c.i){
+  set.seed(c.i)
+  c.weights <- runif(pc_n, min = 0, max = 1)
+  data.table(t(t(c.df) * c.weights)) -> c.df
+  set.seed(500)
+  stats::kmeans(c.df, centers = c.k, iter.max = 30) -> temp2
+  return(data.table(occ = c.df_occ, cluster = temp2$cluster, k = c.k, i = c.i))
+}
+
+lapply(1:n, k_er_1, c.df = df, c.k = 67, c.df_occ = df_occ) %>% rbindlist() -> out
+
+tester <- function(c.acs, c.out, c.i){
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "OCC2010")
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "OCC10LY")
+  # return(c.acs[occ != occ.y & cluster.x == cluster.y, 
+  #             sum(N)]/c.acs[occ != occ.y,sum(N)])
+  
+    return(c.acs[OCC1950 != OCC50LY & cluster.x == cluster.y, 
+              sum(N)]/c.acs[occ != occ.y,sum(N)])
+}
+
+lapply(1:n, tester, c.acs = acs, c.out = out) -> test_out
+unlist(test_out) -> test_out
+which(test_out == max(test_out))-> winner
+
+clusters <- out[i == winner[1]]
+set.seed(winner)
+c.weights <- runif(pc_n, min = 0, max = 1)
+c.df <- copy(df)
+data.table(t(t(c.df) * c.weights)) -> c.df
+set.seed(500)
+centers <-  stats::kmeans(c.df, centers = 67, iter.max = 30)$centers
+acs <- merge(clusters[,.(occ, cluster)], acs, by.x = "occ", by.y = "OCC2010")
+acs <- merge(clusters[,.(occ, cluster)], acs, by.x = "occ", by.y = "OCC10LY")
+setnames(acs, c("cluster.x", "cluster.y", "occ", "occ.y"), c("cluster_67_ly", "cluster_67_current", "OCC10LY", "OCC2010"))
+winner_weights <- copy(c.weights)
+### now run for each other grouping
+lapply(1:n, k_er_1, c.df = centers, c.df_occ = rownames(centers), c.k = 9)  %>% rbindlist() -> out
+
+tester <- function(c.acs, c.out, c.i){
+  c.out[, occ := as.numeric(occ)]
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "cluster_67_current")
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "cluster_67_ly")
+  # return(c.acs[occ != occ.y & cluster.x == cluster.y, 
+  #             sum(N)]/c.acs[occ != occ.y,sum(N)])
+  
+    return(c.acs[OCC1950 != OCC50LY & cluster.x == cluster.y, 
+              sum(N)]/c.acs[occ != occ.y,sum(N)])
+}
+
+lapply(1:n, tester, c.acs = acs, c.out = out) -> test_out
+unlist(test_out) -> test_out
+which(test_out == max(test_out))-> winner
+
+clusters_9 <- out[i == winner[1]]
+set.seed(winner)
+c.weights <- runif(pc_n, min = 0, max = 1)
+c.df <- copy(centers)
+data.table(t(t(c.df) * c.weights)) -> c.df
+set.seed(500)
+centers_9 <-  stats::kmeans(c.df, centers = 9, iter.max = 30)$centers
+acs <- merge(clusters_9[,.(occ, cluster)], acs, by.x = "occ", by.y = "cluster_67_current")
+acs <- merge(clusters_9[,.(occ, cluster)], acs, by.x = "occ", by.y = "cluster_67_ly")
+setnames(acs, c("cluster.x", "cluster.y", "occ", "occ.y"), c("cluster_9_ly", "cluster_9_current", "cluster_67_ly", "cluster_67_current"))
+
+
+#4
+lapply(1:n, k_er_1, c.df = centers_9, c.df_occ = rownames(centers_9), c.k = 4)  %>% rbindlist() -> out
+
+tester <- function(c.acs, c.out, c.i){
+  c.out[, occ := as.numeric(occ)]
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "cluster_9_current")
+  c.acs <- merge(out[i == c.i], c.acs, by.x = "occ", by.y = "cluster_9_ly")
+  # return(c.acs[occ != occ.y & cluster.x == cluster.y, 
+  #             sum(N)]/c.acs[occ != occ.y,sum(N)])
+  
+    return(c.acs[OCC1950 != OCC50LY & cluster.x == cluster.y, 
+              sum(N)]/c.acs[occ != occ.y,sum(N)])
+}
+
+lapply(1:n, tester, c.acs = acs, c.out = out) -> test_out
+unlist(test_out) -> test_out
+which(test_out == max(test_out))-> winner
+
+clusters_4 <- out[i == winner[1]]
+set.seed(winner)
+c.weights <- runif(pc_n, min = 0, max = 1)
+c.df <- copy(centers_9)
+data.table(t(t(c.df) * c.weights)) -> c.df
+set.seed(500)
+centers_4 <-  stats::kmeans(c.df, centers = 4, iter.max = 30)$centers
+acs <- merge(clusters_4[,.(occ, cluster)], acs, by.x = "occ", by.y = "cluster_9_current")
+acs <- merge(clusters_4[,.(occ, cluster)], acs, by.x = "occ", by.y = "cluster_9_ly")
+setnames(acs, c("cluster.x", "cluster.y", "occ", "occ.y"), c("cluster_4_ly", "cluster_4_current", "cluster_9_ly", "cluster_9_current"))
+
+acs[OCC2010 != OCC10LY & cluster_67_current == cluster_67_ly,  length(unique(paste0(OCC10LY, "_", OCC2010)))]/acs[OCC2010 != OCC10LY, length(unique(paste0(OCC10LY, "_", OCC2010)))]
+acs[OCC2010 != OCC10LY & cluster_67_current == cluster_67_ly,  sum(N)]/acs[OCC2010 != OCC10LY, sum(N)]
+```
+
+##
+
+\newpage
+
+```{r, fig.width=6.5, fig.height=9}
+# get loadings from winner
+#http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp/
+contributions <- data.table(value = t(t(get_pca_var(res.pca)$contrib[,1:pc_n]) * c.weights) %>%
+                              data.table() %>% abs() %>% rowSums(),
+                            rn = res.pca$rotation %>% rownames())
+
+contributions[order(value, decreasing = T)] -> contributions
+
+contributions[, rn := gsub("ctx_", "Work Context - ", rn)]
+contributions[, rn := gsub("skl_", "Skill - ", rn)]
+contributions[, rn := gsub("act_", "Activity - ", rn)]
+contributions[, rn := gsub("abl_", "Ability - ", rn)]
+contributions[, rn := gsub("sty_", "Work Style - ", rn)]
+contributions[, rn := gsub("knl_", "Knowledge - ", rn)]
+contributions[, rn := gsub("vlu_", "Work Value - ", rn)]
+contributions[, rn := gsub("edu_", "Qualification - ", rn)]
+contributions[, rn := gsub("inc_", "Characteristic - ", rn)]
+
+contributions[, rn := gsub(".LV", "", rn)]
+contributions[rn %like% "Wear Specialized",
+              rn := "Wear Specialized Protective or Safety Equipment"]
+contributions[, value := (value/sum(value))]
+
+melt(contributions[1:50]) %>% 
+ # .[, rn := gsub("- ", "-\n", rn)] %>% 
+  data.table(keep.rownames = T) %>%
+  .[, rn := factor(rn, levels = .[, rev(rn)])] %>% 
+  ggplot() + 
+  geom_point(aes(x = value, y = rn)) + 
+  scale_x_continuous(labels = scales::percent)+
+  ggtitle("Contribution of Top 35 Occupational Aspects to Class Closure (Aspects: N = 245") + 
+  theme_bw(base_size = 10) + 
+  theme(plot.title = element_text(hjust = 1))+
+  labs(x = "Value (Percent)", y = "Aspect")
+
+
+```
+
+```{r}
+unique(acs$OCC2010) -> levs
+acs[, cluster_occ_ly := paste(cluster_4_ly, cluster_9_ly,
+                                            cluster_67_ly, 
+                                            OCC10LY, sep = "_")]
+unique(acs$cluster_occ_ly) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_occ_ly := factor(cluster_occ_ly, levels = 
+                                               unique(acs$cluster_occ_ly)[temp] )]
+
+acs[, cluster_occ_current := paste(cluster_4_current, cluster_9_current,
+                                                 cluster_67_current,
+                                                 OCC2010, sep = "_")]
+unique(acs$cluster_occ_current) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_occ_current := factor(cluster_occ_current, levels = 
+                                                    unique(acs$cluster_occ_current)[temp] )]
+
+
+###67
+unique(acs$cluster_67_ly) -> levs
+acs[, cluster_67_ly := paste(cluster_4_ly, cluster_9_ly,
+                                            cluster_67_ly, 
+                                             sep = "_")]
+unique(acs$cluster_67_ly) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_67_ly := factor(cluster_67_ly, levels = 
+                                               unique(acs$cluster_67_ly)[temp] )]
+
+acs[, cluster_67_current := paste(cluster_4_current, cluster_9_current,
+                                                 cluster_67_current,
+                                                  sep = "_")]
+unique(acs$cluster_67_current) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_67_current := factor(cluster_67_current, levels = 
+                                                    unique(acs$cluster_67_current)[temp] )]
+
+
+### 9
+unique(acs$cluster_9_ly) -> levs
+
+acs[, cluster_9_ly := paste(cluster_4_ly, cluster_9_ly,
+                                             
+                                             sep = "_")]
+unique(acs$cluster_9_ly) %>% 
+  tstrsplit(., "_", keep = 2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_9_ly := factor(cluster_9_ly, levels = 
+                                               unique(acs$cluster_9_ly)[temp] )]
+
+acs[, cluster_9_current := paste(cluster_4_current, cluster_9_current,
+                                                 
+                                                  sep = "_")]
+unique(acs$cluster_9_current) %>% 
+  tstrsplit(., "_", keep = 2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, cluster_9_current := factor(cluster_9_current, levels = 
+                                                    unique(acs$cluster_9_current)[temp] )]
+###########
+
+
+
+k <- 67
+levs <- acs[, sort(unique(as.character(get(paste0("cluster_", k, "_current")))))]
+dt <- data.table(x = sort(levs))
+dt <- cbind(dt, dt[,tstrsplit(x, "_")])
+dt[, x := 1:67]
+dt1 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V1]
+dt2 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V2]
+
+acs[OCC10LY != OCC2010] %>% 
+  .[,.(N = sum(N)), 
+    by= .(get(paste0("cluster_", k, "_current")), get(paste0("cluster_", k, "_ly")))] %>% 
+  .[, total := sum(N), by = get.1] %>% 
+  .[, prop := N/total] %>% 
+  .[total >= 10] %>% 
+  .[, get := as.numeric(get)] %>% 
+    .[, get.1 := as.numeric(get.1)] %>% 
+
+  ggplot() + 
+  geom_point(aes(y = get,
+                 x = get.1, color = total, size = prop, alpha = N), shape = 1, stroke = 1) + 
+  scale_color_viridis_c(trans = "log10", direction = -1) +
+  scale_radius(range = c(.1, 15), )+
+    scale_alpha_continuous(trans = 'log10')+
+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text = element_text(size = 5)) + 
+  scale_y_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  scale_x_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  coord_cartesian(xlim = c(1, length(levs)), ylim = c(1,length(levs)))+
+  ggtitle(paste0("K = ", k)) +
+  labs(title = "Source and Sink Classes (K = 67)\nSuperimposed with  K=9 and K=4 Groupings",
+       x = "Class Last Year",
+       y = "Class Current Year",
+       color = "Total Number\nin Source Class",
+       size = "Proportion of\nClass Movers") +
+  geom_rect(data = dt2, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "blue", fill = NA) + 
+    geom_rect(data = dt1, aes(xmin = minx + -.5, ymin = minx-.5, ymax = maxx+.5, xmax = maxx+.5), color = "red", fill = NA)-> gg
+print(gg)
+
+
+
+k <- "occ"
+levs <- acs[, sort(unique(levels(cluster_occ_current)))]
+dt <- data.table(x = sort(levs))
+dt <- cbind(dt, dt[,tstrsplit(x, "_")])
+dt[, x := 1:nrow(dt)]
+dt1 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V1]
+dt2 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V2]
+dt3 <- dt[,.(minx = min(x), 
+             maxx = max(x)), by = V3]
+
+acs[OCC10LY != OCC2010] %>% 
+  .[,.(N = sum(N)), 
+    by= .(get(paste0("cluster_", k, "_current")), get(paste0("cluster_", k, "_ly")))] %>% 
+  .[, total := sum(N), by = get.1] %>% 
+  .[, prop := N/total] %>% 
+  .[total >= 1] %>% 
+  .[, get := as.numeric(get)] %>% 
+    .[, get.1 := as.numeric(get.1)] %>% 
+
+  ggplot() + 
+  geom_point(aes(y = get,
+                 x = get.1, color = total, size = prop, alpha = N), shape = 1, stroke = .5) + 
+  scale_color_viridis_c(trans = "log10", direction = -1) +
+  scale_radius(range = c(.1, 15), )+
+    scale_alpha_continuous(trans = 'log10')+
+
+  theme(axis.text.x = element_text(angle = 90), 
+        axis.text = element_text(size = 1)) + 
+  scale_y_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  scale_x_continuous( labels = sort(levs),breaks = 1:length(levs))+
+  coord_cartesian(xlim = c(1, length(levs)), ylim = c(1,length(levs)))+
+  ggtitle(paste0("K = ", k)) +
+  labs(title = "Source and Sink Occupations Superimposed\nwith K= 67, K=9 and K=4 Groupings",
+       x = "Class Last Year",
+       y = "Class Current Year",
+       color = "Total Number\nin Source Class",
+       size = "Proportion of\nClass Movers") +
+    geom_rect(data = dt3, aes(xmin = minx + -.5, ymin = minx-.5, 
+                              ymax = maxx+.5, xmax = maxx+.5), color = "hot pink", fill = NA) + 
+
+  geom_rect(data = dt2, aes(xmin = minx + -.5, ymin = minx-.5, 
+                            ymax = maxx+.5, xmax = maxx+.5), color = "blue", fill = NA) + 
+    geom_rect(data = dt1, aes(xmin = minx + -.5, ymin = minx-.5,
+                              ymax = maxx+.5, xmax = maxx+.5), color = "red", fill = NA)-> gg
+print(gg)
+```
+
+#
+
+```{r, results = 'asis'}
+acs[OCC50LY != OCC1950 & cluster_67_ly == cluster_67_current, sum(N)]/acs[OCC50LY != OCC1950 , sum(N)]
+acs[OCC50LY != OCC1950 & cluster_9_ly == cluster_9_current, sum(N)]/acs[OCC50LY != OCC1950 , sum(N)]
+acs[OCC50LY != OCC1950 & cluster_4_ly == cluster_4_current, sum(N)]/acs[OCC50LY != OCC1950 , sum(N)]
+
+
+# cheng xwalk
+cheng <- data.table(readstata13::read.dta13("../ref/occ1950_mc_xwalk_70.dta"))
+cheng[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# occ50 recode
+occ50_recode <- fread("../ref/occ1950_recode.csv")
+occ50_recode <- occ50_recode[,1:2]
+names(occ50_recode) <- unlist(occ50_recode[1, ])
+occ50_recode <- occ50_recode[-1,]
+occ50_recode <- occ50_recode[!is.na(as.numeric(occ1950_num))]
+occ50_recode[, occ1950 := gsub("[^A-Za-z0-9]", "", tolower(occ1950))]
+
+# merge
+cheng <- merge(cheng, occ50_recode[,.(occ1950, occ1950_num)], all.x = T)
+
+#fix the stragglers
+fix <- cheng[is.na(occ1950_num)]
+candidates <- occ50_recode[!occ1950 %in% cheng$occ1950]
+
+for(c.fix in 1:nrow(fix)){
+  goal <- substr(fix[c.fix, occ1950],1,7)
+  new <- candidates[candidates$occ1950 %like% goal, occ1950_num]
+  if(length(new) == 1){fix[c.fix, new_occ1950_num := new]}
+}
+
+
+fix[is.na(new_occ1950_num), new_occ1950_num := c(43, 34, 44, 603, 16, 46, 605,94, 19,48,69,84,26,23,27,29)]
+
+cheng <- merge(cheng, fix[,.(occ1950, new_occ1950_num)], by = "occ1950", all.x = T)
+cheng[is.na(occ1950_num), occ1950_num := new_occ1950_num]
+cheng[, occ1950_num := as.numeric(occ1950_num)]
+cheng[, new_occ1950_num := NULL]
+setnames(cheng, "occ1950_num", "OCC1950")
+cheng[, occ1950 := NULL]
+
+factorr <- function(x){ifelse(is.character(x), return(factor(x)), return(x))}
+cheng[,names(cheng) := lapply(.SD, factorr), .SDcols = names(cheng)]
+cheng <- merge(cheng, acs_xwalk[!duplicated(OCC2010)] )
+cheng[, OCC1950 := NULL]
+#acs <- merge(acs, cheng, by.x = "OCC1950", by.y = "occ1950_num", all.x = T)
+acs <- acs[cheng, on = "OCC2010"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_current"))
+
+setnames(cheng, "OCC2010", "OCC10LY")
+
+acs <- acs[cheng, on = "OCC10LY"]
+
+setnames(acs, c("mesoocc", "macroocc", "microocc"), paste0(c("mesoocc", "macroocc", "microocc"), "_ly"))
+
+# loop over scheme and calculate concordance
+for(c.scheme in  c( "mesoocc", "macroocc", "microocc", "cluster_67", "cluster_9", "cluster_4")){
+  acs[,paste0(c.scheme, "_conc") := get(paste0(c.scheme, "_ly")) == get(paste0(c.scheme, "_current")) ]
+}
+
+
+acs <- acs[!is.na(OCC2010)]
+
+num_correct <- acs[OCC1950 != OCC50LY & !is.na(cluster_67_current),sum(N), by = .(cluster_67_conc) ]
+num_correct2 <- acs[OCC1950 != OCC50LY  & !is.na(cluster_67_current),sum(N), by = .(cluster_9_conc) ]
+num_correct3 <- acs[OCC1950 != OCC50LY  & !is.na(cluster_67_current),sum(N), by = .(cluster_4_conc) ]
+num_correct4 <- acs[OCC1950 != OCC50LY  & !is.na(cluster_67_current),sum(N), by = .(macroocc_conc) ]
+num_correct5 <- acs[OCC1950 != OCC50LY  & !is.na(cluster_67_current),sum(N), by = .(microocc_conc) ]
+num_correct6 <- acs[OCC1950 != OCC50LY  & !is.na(cluster_67_current),sum(N), by = .(mesoocc_conc) ]
+
+num_correct <- data.table(cluster_67_current = num_correct[1,2],
+                          cluster_9_current = num_correct2[1,2],
+                          cluster_4_current = num_correct3[1,2],
+                           num_correct4[1,2],
+                           num_correct5[1,2],
+                           num_correct6[1,2])
+setnames(num_correct, c("cluster_67_current", "cluster_9_current", "cluster_4_current",
+                        "macroocc_conc", "microocc_conc", "mesoocc_conc"))
+
+
+total <- acs[OCC1950 != OCC50LY , sum(N)]
+num_correct <- num_correct/total
+num_cats <- acs[OCC1950 != OCC50LY , lapply(.SD, FUN = function(x){length(unique(x))}), .SDcols = names(acs)[names(acs) %like% "occ_ly|bin_ly"]]
+
+num_correct->out
+out <- melt(out) %>% data.table(., keep.rownames = T)
+out[,id := c(3,2,1,1,3,2)]
+out[,method := c( rep("Nested ONET-Based",3),
+                 rep("Traditional",3))]
+out <- dcast(out, method ~ id)
+setnames(out, c("Method", "Macro (4)", "Meso (9)", "Micro (67)"))
+xtable::xtable(out)
+
+```
+
+#
+
+```{r, results='asis'}
+acs[,.(OCC2010, cluster_67_current, cluster_9_current, cluster_4_current)] %>% unique() -> jobs
+jobs <- merge(jobs, skills_final[,.(`CPS Occupational Title`, `CPS Code`)], 
+              by.x = "OCC2010", by.y = "CPS Code")
+jobs[, `CPS Occupational Title` := substr(`CPS Occupational Title`,1,30)]
+jobs <- jobs[jobs[order(cluster_4_current, 
+                        cluster_9_current, cluster_67_current)],
+             .(`CPS Occupational Title`,
+               cluster_67_current, cluster_9_current,
+               cluster_4_current)]
+setnames(jobs, c("Title", "Class_67", "Class_9", "Class_4"))
+
+for(i in 1:ceiling(nrow(jobs)/50)){
+  cat("\n") 
+  cat("###", i, "\n") # Create second level headings with the names.
+  
+  print(
+    xtable::xtable(jobs[(0 + (50 * (i - 1))):((50 * (i))-1)])
+  )
+  
+  cat("\n")
+}
+```

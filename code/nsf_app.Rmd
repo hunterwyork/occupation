@@ -1,0 +1,279 @@
+---
+title: "nsf_figures"
+author: "Hunter York"
+date: "12/24/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, include = T)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+pc_n <- 80
+n <- 5000
+
+
+options
+theme_set(theme_bw(base_size = 5)) 
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  sum.w2 <- sum(w^2)
+  mean.w <- sum(x * w) / sum(w)
+  (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                       na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/cps_00011.dta")
+# acs2 <- fread("../inputs/cps_00008.csv")
+# acs <- cbind(acs, acs2[,.(OCC2010, OCC1990,OCC1950, OCC, OCCLY,OCC50LY, OCC90LY, OCC10LY, HOURWAGE)])
+# acs <- acs[acs$empstat == "at work" &
+#                              (acs$schlcoll %like% "does not attend|niu"| is.na(acs$schlcoll)) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork1 >= 30 &
+#                              acs$incwage != 99999999 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+#keep vars
+# acs <- acs[,.(race,relate,serial, hispan, year,asecwt, sex, age, schlcoll,educ, empstat,OCC,OCC2010,OCC1990, ind,ind1990, classwkr, ahrsworkt,wkswork1, uhrsworkly,classwly,workly,OCCLY,indly,OCC90LY,OCC1950, OCC50LY,ind90ly,OCC10LY, incwage, HOURWAGE,whymove, strechlk, whyptly)]
+
+# subset
+
+
+#saveRDS(acs, "../inputs/cps_00010.rds")
+acs <- readRDS( "../inputs/cps_00010.rds")
+#acs <- readRDS( "../inputs/cps_00004.rds")
+
+
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+acs[, log_incwage := log(incwage + 1)]
+
+#
+#acs <- acs[year %in% seq(1990,1999,3)]
+
+# load occ_soc xwalk
+occ_xwalk <- data.table(read_excel("../ref/nem-occcode-cps-crosswalk.xlsx"))
+names(occ_xwalk) <- occ_xwalk[4,] %>% unlist()
+occ_xwalk <- occ_xwalk[-(1:4),]
+occ_xwalk[, OCCSOC := gsub("-", "", `Hybrid SOC Code`)]
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+skills[, Element.Name := paste0("skl_", Element.Name)]
+# add abilities
+abilities_2009 <- read.delim('../ref/db_14_0 2009.7/Abilities.txt') %>% data.table()
+abilities_2013 <-  read.delim('../ref/db_18_0_2013.7/Abilities.txt') %>% data.table()
+abilities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Abilities.xlsx") %>% data.table()
+abilities_2009[, year := 2009]
+abilities_2013[, year := 2013]
+abilities_2018[, year := 2018]
+setnames(abilities_2018, names(abilities_2018), gsub(" ", ".", names(abilities_2018), fixed = T))
+abilities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+abilities <- rbindlist(list(abilities_2009, abilities_2013, abilities_2018), fill = T)
+abilities <- abilities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+abilities[, Element.Name := paste0("abl_", Element.Name)]
+
+# add knowledge
+knowledge_2009 <- read.delim('../ref/db_14_0 2009.7/Knowledge.txt') %>% data.table()
+knowledge_2013 <-  read.delim('../ref/db_18_0_2013.7/Knowledge.txt') %>% data.table()
+knowledge_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Knowledge.xlsx") %>% data.table()
+knowledge_2009[, year := 2009]
+knowledge_2013[, year := 2013]
+knowledge_2018[, year := 2018]
+setnames(knowledge_2018, names(knowledge_2018), gsub(" ", ".", names(knowledge_2018), fixed = T))
+knowledge_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+knowledge <- rbindlist(list(knowledge_2009, knowledge_2013, knowledge_2018), fill = T)
+knowledge <- knowledge[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+knowledge[, Element.Name := paste0("knl_", Element.Name)]
+
+# add work activities
+workactivities_2009 <- read.delim('../ref/db_14_0 2009.7/Work Activities.txt') %>% data.table()
+workactivities_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Activities.txt') %>% data.table()
+workactivities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Activities.xlsx") %>% data.table()
+workactivities_2009[, year := 2009]
+workactivities_2013[, year := 2013]
+workactivities_2018[, year := 2018]
+setnames(workactivities_2018, names(workactivities_2018), gsub(" ", ".", names(workactivities_2018), fixed = T))
+workactivities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workactivities <- rbindlist(list(workactivities_2009, workactivities_2013, workactivities_2018), fill = T)
+workactivities <- workactivities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workactivities[, Element.Name := paste0("act_", Element.Name)]
+
+# add work styles
+workstyles_2009 <- read.delim('../ref/db_14_0 2009.7/Work Styles.txt') %>% data.table()
+workstyles_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Styles.txt') %>% data.table()
+workstyles_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Styles.xlsx") %>% data.table()
+workstyles_2009[, year := 2009]
+workstyles_2013[, year := 2013]
+workstyles_2018[, year := 2018]
+setnames(workstyles_2018, names(workstyles_2018), gsub(" ", ".", names(workstyles_2018), fixed = T))
+workstyles_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workstyles <- rbindlist(list(workstyles_2009, workstyles_2013, workstyles_2018), fill = T)
+workstyles <- workstyles[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workstyles[, Element.Name := paste0("sty_", Element.Name)]
+
+# add work context
+context_2009 <- read.delim('../ref/db_14_0 2009.7/Work Context.txt') %>% data.table()
+context_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Context.txt') %>% data.table()
+context_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Context.xlsx") %>% data.table()
+context_2009[, year := 2009]
+context_2013[, year := 2013]
+context_2018[, year := 2018]
+setnames(context_2018, names(context_2018), gsub(" ", ".", names(context_2018), fixed = T))
+context_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+context <- rbindlist(list(context_2009, context_2013, context_2018), fill = T)
+context <- context[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+context <- context[Scale.ID %in% c("CX", "CT")]
+context[, Element.Name := paste0("ctx_", Element.Name)]
+
+# # add tasks
+# task_2009 <- read.delim('../ref/db_14_0 2009.7/Task Ratings.txt') %>% data.table()
+# task_2013 <-  read.delim('../ref/db_18_0_2013.7/Task Ratings.txt') %>% data.table()
+# task_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Task Ratings.xlsx") %>% data.table()
+# task_2009[, year := 2009]
+# task_2013[, year := 2013]
+# task_2018[, year := 2018]
+# setnames(task_2018, names(task_2018), gsub(" ", ".", names(task_2018), fixed = T))
+# task_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+# task <- rbindlist(list(task_2009, task_2013, task_2018), fill = T)
+# task <- task[, .(O.NET.SOC.Code, Task, Scale.ID, Data.Value, Standard.Error, year)]
+# task <- task[Scale.ID %in% c("IM")]
+# task[, Element.Name := paste0("tsk_", Task)]
+# task <- task[!is.na(Task)]
+#
+skills <- rbindlist(list(skills, knowledge, abilities, workstyles, workactivities,context), fill = T)
+#skills <- rbindlist(list(skills, knowledge, abilities, workstyles, workactivities), fill = T)
+
+# standardize
+skills[Scale.ID == "LV", Data.Value := Data.Value/7]
+skills[Scale.ID == "IM", Data.Value := (Data.Value-1)/4]
+skills[Scale.ID == "CX", Data.Value := (Data.Value-1)/4]
+skills[Scale.ID == "CT", Data.Value := (Data.Value-1)/2]
+
+skills[Element.Name %like% "sty", Scale.ID := "LV"]
+skills[Element.Name %like% "ctx", Scale.ID := "LV"]
+
+#
+skills <- skills[Scale.ID == "LV"]
+# reformate onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+skills[, Standard.Error := as.numeric(Standard.Error)]
+skills <- skills[,.(Data.Value = mean(Data.Value),
+                    Standard.Error = mean((Standard.Error))), by = .(Element.Name,Scale.ID, OCCSOC)]
+
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+
+# chack to see which occ codes are missing
+occ_xwalk[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+
+# 
+skills[, Element.Name := paste0(Element.Name, ".", Scale.ID)]
+#skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+skills <- skills[OCCSOC != 152091]
+skills_wide <- dcast(skills, OCCSOC   ~Element.Name, value.var = "Data.Value")
+res.pca <- prcomp(skills_wide[,-1], scale = TRUE, center = T)
+
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, paste0("pc", 1:pc_n) := data.table(predict(res.pca, newdata = .SD)[,1:pc_n]), .SDcols = names(skills_sum)]
+
+
+# skills_sum[, skl_tech_skill.LV := skl_Programming.LV + `skl_Complex Problem Solving.LV` +
+#              `skl_Mathematics.LV`  + skl_Science.LV + `skl_Systems Analysis.LV` +
+#              skl_Troubleshooting.LV]
+# skills_sum[, skl_tech_skill.IM := skl_Programming.IM + `skl_Complex Problem Solving.IM` +
+#              `skl_Mathematics.IM`  + skl_Science.IM + `skl_Systems Analysis.IM` +
+#              skl_Troubleshooting.IM]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "skl"]]
+skills_sum[, average_value_abilities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "abl"]]
+skills_sum[, average_value_knowledge := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "knl"]]
+skills_sum[, average_value_workstyles := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "sty"]]
+skills_sum[, average_value_activities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "act"]]
+
+skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
+
+# collapse to OCCSOC
+vars <- names(skills_wide)[-1]
+skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
+acs[, OCC2010 := as.character(OCC2010)]
+
+#standardize occ2010 to match occ2019
+#this is due to a problem with the occ2010 var where a bunch of occs
+#shift from one occ to another in 2005, which doesn't happen in the occ
+#2019 var
+# acs[,.(OCC2010, OCC1990)] %>% unique -> temp
+# temp <- temp[!duplicated(temp$OCC2010)]
+# skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
+# vars_temp <- names(skills_final)[!names(skills_final) %like% "CPS|OCC"]
+# skills_final[, (vars_temp) := lapply(.SD, mean, na.rm = T), by = OCC1990, .SDcols = vars_temp]
+# skills_final[,OCC1990 := NULL]
+
+#clean up memory
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var", "skills_final", "res.pca", "pc_n", "n")])
+
+acs[, OCC10LY := as.character(OCC10LY)]
+
+skills_final[, OCC2010 := `CPS Code`]
+
+acs <- merge(acs, skills_final[,.SD,.SDcols = names(skills_final)[!names(skills_final) %like% "pc|average"]], by = "OCC2010")
+
+skills_sum <- acs[,lapply(.SD, weighted.mean, w = asecwt), .SDcols = vars[vars %like% "act_|sty_|knl_|ctx|skl|abl_"], by = year]
+skills_sum <- melt(skills_sum, id.var = "year")
+skills_sum[, group := substr(variable, 1,3)]
+skills_sum[, variable := gsub(".LV", "", str_sub(variable,5, -1))]
+ggplot(skills_sum) + 
+  geom_line(aes(x = year, y = value, color = variable, group = variable), show.legend = F) + 
+  facet_wrap(~group)
+```
+
+```{r, results = 'asis'}
+skills_sum_sum <- skills_sum[,.(diff = value[year == 2020]-value[year == 1990],
+              value_1990 = value[year == 1990], 
+              value_2020 = value[year == 2020]), by = .(variable, group)]
+skills_sum_sum[frank(diff) %in% c(1:10, 234:225)] %>% 
+  .[order(diff, decreasing = T)] -> skills_sum_sum
+
+skills_sum_sum %>% setnames(., c("Aspect", "Domain", "Difference", "Value (1990)", "Value (2020)"))
+skills_sum_sum[Domain == "ctx", Domain := "Work Contexts"]
+skills_sum_sum[Domain == "abl", Domain := "Abilities"]
+skills_sum_sum[Domain == "knl", Domain := "Knowledge"]
+skills_sum_sum[Domain == "act", Domain := "Work Activities"]
+skills_sum_sum[Domain == "skl", Domain := "Skills"]
+out <- xtable::xtable(skills_sum_sum[, c(1,2,4,5,3)], caption = "Changes in Percent Rank of Average Job Aspects\nAcross the Population (1990-2020)")
+xtable::align(out, "lp{3in}p{1in}p{1in}p{1in}p{1in}")
+print(out, include.rownames = F)
+```

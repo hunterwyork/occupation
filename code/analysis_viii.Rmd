@@ -1,0 +1,491 @@
+---
+title: "analysis_viii"
+author: "Hunter York"
+date: "12/24/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, include = T)
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(readxl)
+library(ggrepel)
+library(foreign)
+library(ipumsr)
+library(data.table)
+library(factoextra)
+
+
+
+options
+theme_set(theme_bw(base_size = 5)) 
+
+# load the data
+setwd("/Users/hyork/Documents/projects/occupation/code")
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  sum.w2 <- sum(w^2)
+  mean.w <- sum(x * w) / sum(w)
+  (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+                                       na.rm)
+}
+
+
+
+# acs <- readstata13::read.dta13("../inputs/cps_00011.dta")
+# acs2 <- fread("../inputs/cps_00008.csv")
+# acs <- cbind(acs, acs2[,.(OCC2010, OCC1990,OCC1950, OCC, OCCLY,OCC50LY, OCC90LY, OCC10LY, HOURWAGE)])
+# acs <- acs[acs$empstat == "at work" &
+#                              (acs$schlcoll %like% "does not attend|niu"| is.na(acs$schlcoll)) &
+#                              as.numeric(as.character(acs$age)) %in% 25:64 &
+#                             acs$wkswork1 >= 30 &
+#                              acs$incwage != 99999999 &
+#                              acs$incwage > 0,]
+# acs <- data.table(acs)
+#keep vars
+# acs <- acs[,.(race,relate,serial, hispan, year,asecwt, sex, age, schlcoll,educ, empstat,OCC,OCC2010,OCC1990, ind,ind1990, classwkr, ahrsworkt,wkswork1, uhrsworkly,classwly,workly,OCCLY,indly,OCC90LY,OCC1950, OCC50LY,ind90ly,OCC10LY, incwage, HOURWAGE,whymove, strechlk, whyptly)]
+
+# subset
+
+
+#saveRDS(acs, "../inputs/cps_00010.rds")
+acs <- readRDS( "../inputs/cps_00010.rds")
+
+# derive a 5-year age var
+acs[, age_cat := paste0(floor(as.numeric(as.character(age))/5)*5,
+                        " to ", 
+                        floor(as.numeric(as.character(age))/5)*5 + 4)]
+
+acs[, log_incwage := log(incwage + 1)]
+
+#
+#acs <- acs[year %in% seq(1990,1999,3)]
+
+# load occ_soc xwalk
+occ_xwalk <- data.table(read_excel("../ref/nem-occcode-cps-crosswalk.xlsx"))
+names(occ_xwalk) <- occ_xwalk[4,] %>% unlist()
+occ_xwalk <- occ_xwalk[-(1:4),]
+occ_xwalk[, OCCSOC := gsub("-", "", `Hybrid SOC Code`)]
+
+# now create skills dataset
+skills_2009 <- read.delim('../ref/db_14_0 2009.7/Skills.txt') %>% data.table()
+skills_2013 <-  read.delim('../ref/db_18_0_2013.7/Skills.txt') %>% data.table()
+skills_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Skills.xlsx") %>% data.table()
+skills_2009[, year := 2009]
+skills_2013[, year := 2013]
+skills_2018[, year := 2018]
+setnames(skills_2018, names(skills_2018), gsub(" ", ".", names(skills_2018), fixed = T))
+skills_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+skills <- rbindlist(list(skills_2009, skills_2013, skills_2018), fill = T)
+skills <- skills[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+skills[, Element.Name := paste0("skl_", Element.Name)]
+# add abilities
+abilities_2009 <- read.delim('../ref/db_14_0 2009.7/Abilities.txt') %>% data.table()
+abilities_2013 <-  read.delim('../ref/db_18_0_2013.7/Abilities.txt') %>% data.table()
+abilities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Abilities.xlsx") %>% data.table()
+abilities_2009[, year := 2009]
+abilities_2013[, year := 2013]
+abilities_2018[, year := 2018]
+setnames(abilities_2018, names(abilities_2018), gsub(" ", ".", names(abilities_2018), fixed = T))
+abilities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+abilities <- rbindlist(list(abilities_2009, abilities_2013, abilities_2018), fill = T)
+abilities <- abilities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+abilities[, Element.Name := paste0("abl_", Element.Name)]
+
+# add knowledge
+knowledge_2009 <- read.delim('../ref/db_14_0 2009.7/Knowledge.txt') %>% data.table()
+knowledge_2013 <-  read.delim('../ref/db_18_0_2013.7/Knowledge.txt') %>% data.table()
+knowledge_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Knowledge.xlsx") %>% data.table()
+knowledge_2009[, year := 2009]
+knowledge_2013[, year := 2013]
+knowledge_2018[, year := 2018]
+setnames(knowledge_2018, names(knowledge_2018), gsub(" ", ".", names(knowledge_2018), fixed = T))
+knowledge_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+knowledge <- rbindlist(list(knowledge_2009, knowledge_2013, knowledge_2018), fill = T)
+knowledge <- knowledge[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+knowledge[, Element.Name := paste0("knl_", Element.Name)]
+
+# add work activities
+workactivities_2009 <- read.delim('../ref/db_14_0 2009.7/Work Activities.txt') %>% data.table()
+workactivities_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Activities.txt') %>% data.table()
+workactivities_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Activities.xlsx") %>% data.table()
+workactivities_2009[, year := 2009]
+workactivities_2013[, year := 2013]
+workactivities_2018[, year := 2018]
+setnames(workactivities_2018, names(workactivities_2018), gsub(" ", ".", names(workactivities_2018), fixed = T))
+workactivities_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workactivities <- rbindlist(list(workactivities_2009, workactivities_2013, workactivities_2018), fill = T)
+workactivities <- workactivities[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workactivities[, Element.Name := paste0("act_", Element.Name)]
+
+# add work styles
+workstyles_2009 <- read.delim('../ref/db_14_0 2009.7/Work Styles.txt') %>% data.table()
+workstyles_2013 <-  read.delim('../ref/db_18_0_2013.7/Work Styles.txt') %>% data.table()
+workstyles_2018 <- read_excel("../ref/db_22_2_excel 2018.2/Work Styles.xlsx") %>% data.table()
+workstyles_2009[, year := 2009]
+workstyles_2013[, year := 2013]
+workstyles_2018[, year := 2018]
+setnames(workstyles_2018, names(workstyles_2018), gsub(" ", ".", names(workstyles_2018), fixed = T))
+workstyles_2018[, `O.NET.SOC.Code` := `O*NET-SOC.Code`]
+workstyles <- rbindlist(list(workstyles_2009, workstyles_2013, workstyles_2018), fill = T)
+workstyles <- workstyles[, .(O.NET.SOC.Code, Element.Name, Scale.ID, Data.Value, Standard.Error, year)]
+workstyles[, Element.Name := paste0("sty_", Element.Name)]
+
+#
+skills <- rbindlist(list(skills, knowledge, abilities, workstyles, workactivities), fill = T)
+
+# standardize
+skills[Scale.ID == "LV", Data.Value := Data.Value/7]
+skills[Scale.ID == "IM", Data.Value := (Data.Value-1)/4]
+skills[Element.Name %like% "sty", Scale.ID := "LV"]
+#
+skills <- skills[Scale.ID == "LV"]
+# reformate onet codes to merge
+skills[, OCCSOC := gsub("-", "", substr(O.NET.SOC.Code,1,7))]
+skills <- skills[,.(Data.Value = mean(Data.Value),
+                    Standard.Error = mean(as.numeric(Standard.Error))), by = .(Element.Name,Scale.ID, OCCSOC)]
+
+# chack to see which occ codes are missing
+occ_xwalk[!OCCSOC %in% unique(skills$OCCSOC), unique(OCCSOC)]
+
+# 
+skills[, Element.Name := paste0(Element.Name, ".", Scale.ID)]
+skills[,Data.Value := percent_rank(Data.Value), by = .(Element.Name, Scale.ID)]
+skills <- skills[OCCSOC != 152091]
+skills_wide <- dcast(skills, OCCSOC   ~Element.Name, value.var = "Data.Value")
+res.pca <- prcomp(skills_wide[,-1], scale = TRUE, center = T)
+
+# skills wide
+skills_sum <- skills_wide
+skills_sum[, pc1 := predict(res.pca, newdata = .SD)[,1], .SDcols = names(skills_sum)]
+skills_sum[, pc2 := predict(res.pca, newdata = .SD)[,2], .SDcols = names(skills_sum)]
+skills_sum[, pc3 := predict(res.pca, newdata = .SD)[,3], .SDcols = names(skills_sum)]
+skills_sum[, pc4 := predict(res.pca, newdata = .SD)[,4], .SDcols = names(skills_sum)]
+skills_sum[, pc5 := predict(res.pca, newdata = .SD)[,5], .SDcols = names(skills_sum)]
+skills_sum[, pc6 := predict(res.pca, newdata = .SD)[,6], .SDcols = names(skills_sum)]
+skills_sum[, pc7 := predict(res.pca, newdata = .SD)[,7], .SDcols = names(skills_sum)]
+skills_sum[, pc8 := predict(res.pca, newdata = .SD)[,8], .SDcols = names(skills_sum)]
+skills_sum[, pc9 := predict(res.pca, newdata = .SD)[,9], .SDcols = names(skills_sum)]
+skills_sum[, pc10 := predict(res.pca, newdata = .SD)[,10], .SDcols = names(skills_sum)]
+skills_sum[, pc11 := predict(res.pca, newdata = .SD)[,11], .SDcols = names(skills_sum)]
+skills_sum[, pc12 := predict(res.pca, newdata = .SD)[,12], .SDcols = names(skills_sum)]
+skills_sum[, pc13 := predict(res.pca, newdata = .SD)[,13], .SDcols = names(skills_sum)]
+skills_sum[, pc14 := predict(res.pca, newdata = .SD)[,14], .SDcols = names(skills_sum)]
+skills_sum[, pc15 := predict(res.pca, newdata = .SD)[,15], .SDcols = names(skills_sum)]
+skills_sum[, pc16 := predict(res.pca, newdata = .SD)[,16], .SDcols = names(skills_sum)]
+skills_sum[, pc17 := predict(res.pca, newdata = .SD)[,17], .SDcols = names(skills_sum)]
+skills_sum[, pc18 := predict(res.pca, newdata = .SD)[,18], .SDcols = names(skills_sum)]
+skills_sum[, pc19 := predict(res.pca, newdata = .SD)[,19], .SDcols = names(skills_sum)]
+skills_sum[, pc20 := predict(res.pca, newdata = .SD)[,20], .SDcols = names(skills_sum)]
+skills_sum[, pc21 := predict(res.pca, newdata = .SD)[,21], .SDcols = names(skills_sum)]
+skills_sum[, pc22 := predict(res.pca, newdata = .SD)[,22], .SDcols = names(skills_sum)]
+skills_sum[, pc23 := predict(res.pca, newdata = .SD)[,23], .SDcols = names(skills_sum)]
+skills_sum[, pc24 := predict(res.pca, newdata = .SD)[,24], .SDcols = names(skills_sum)]
+skills_sum[, pc25 := predict(res.pca, newdata = .SD)[,25], .SDcols = names(skills_sum)]
+
+# skills_sum[, skl_tech_skill.LV := skl_Programming.LV + `skl_Complex Problem Solving.LV` +
+#              `skl_Mathematics.LV`  + skl_Science.LV + `skl_Systems Analysis.LV` + 
+#              skl_Troubleshooting.LV]
+# skills_sum[, skl_tech_skill.IM := skl_Programming.IM + `skl_Complex Problem Solving.IM` +
+#              `skl_Mathematics.IM`  + skl_Science.IM + `skl_Systems Analysis.IM` + 
+#              skl_Troubleshooting.IM]
+skills_sum[, average_value_skills := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "skl"]]
+skills_sum[, average_value_abilities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "abl"]]
+skills_sum[, average_value_knowledge := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "knl"]]
+skills_sum[, average_value_workstyles := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "sty"]]
+skills_sum[, average_value_activities := rowMeans(.SD), .SDcols = rownames(res.pca$rotation)[rownames(res.pca$rotation) %like% "LV" & rownames(res.pca$rotation) %like% "act"]]
+
+skills_sum <- merge(skills_sum, occ_xwalk, by = "OCCSOC")
+
+
+# collapse to OCCSOC
+vars <- names(skills_wide)[-1]
+skills_final <- skills_sum[,lapply(.SD, mean), .SDcols = vars, by = .(`CPS Code`, `CPS Occupational Title`)]
+acs[, OCC2010 := as.character(OCC2010)]
+
+#standardize occ2010 to match occ2019
+#this is due to a problem with the occ2010 var where a bunch of occs
+#shift from one occ to another in 2005, which doesn't happen in the occ
+#2019 var
+acs[,.(OCC2010, OCC1990)] %>% unique -> temp
+temp <- temp[!duplicated(temp$OCC2010)]
+skills_final <- merge(skills_final, temp, by.x = "CPS Code", by.y = "OCC2010", all.x = T)
+vars_temp <- names(skills_final)[!names(skills_final) %like% "CPS|OCC"]
+skills_final[, (vars_temp) := lapply(.SD, mean, na.rm = T), by = OCC1990, .SDcols = vars_temp]
+skills_final[,OCC1990 := NULL]
+
+#clean up memory
+rm(list = ls()[!ls() %in% c("acs", "vars", "weighted.var", "skills_final", "res.pca")])
+
+acs[, OCC10LY := as.character(OCC10LY)]
+
+skills_final[, OCC2010 := `CPS Code`]
+acs_temp <- copy(acs)
+
+
+acs <- copy(acs_temp)
+df <- skills_final[!duplicated(skills_final$OCC2010), .SD, .SDcols = names(skills_final)[names(skills_final) %like% "skl|knl|abl|act|sty|pc|OCC2010" & names(skills_final) %like% "pc|OCC2010"]]
+df_occ <- df[,OCC2010]
+df[, OCC2010 := NULL]
+df <- df[,.(pc1, pc2, pc3, pc4, pc5, pc6, pc7, pc8, pc9, pc10, pc11, pc12, pc13, pc14, pc15, pc16, pc17,
+            pc18, pc19, pc20, pc21, pc22, pc23, pc24, pc25)]
+
+
+
+c(120, 67, 9, 4) -> k_cand
+acs[, OCC10LY := as.character(OCC10LY)]
+acs <- acs[,.N, by = .(OCC2010, OCC10LY)]
+
+
+for(k in k_cand[1]){
+  stats::kmeans(df, centers = k, iter.max = 30) -> temp2
+  df_temp2 <- data.table(OCC2010 = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp2, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_current"))
+  df_temp2[, paste0("kmeans_nested_cluster_", k, "_current") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                       ",")]
+  acs <- merge(acs, df_temp2, by = "OCC2010")
+  
+  df_temp3 <- data.table(OCC10LY = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp3, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_ly"))
+  df_temp3[, paste0("kmeans_nested_cluster_", k, "_ly") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                                  ",")]
+  
+  acs <- merge(acs, df_temp3, by = "OCC10LY")
+  
+  
+  centers <- temp2$centers
+  
+  melt(centers) %>% data.table() %>% .[,.(value = value[Var2 == "pc1"]), by = Var1] %>% .[order(value, decreasing = T), Var1] %>% .[1] -> high_skill
+  
+  centers_long <- melt(centers)
+  centers_long <- data.table(centers_long)
+  centers_long[, Var1 := paste0(",", Var1, ",")]
+  centers_long <- merge(centers_long, centers_long, by = "Var2", allow.cartesian = T)
+  centers_dist <- data.table(centers_long)[,.(geo_mean_dist = mean(abs(value.x - value.y))),
+                                           by = .(Var1.x, Var1.y)]
+  setnames(centers_dist, c(paste0("kmeans_nested_cluster_", k, "_current"), 
+                           paste0("kmeans_nested_cluster_", k, "_ly"), paste0("geo_nested_means_", k, "_dist")))
+  
+  # create vectors of nearest neighbors
+  for(k_temp in paste0(",", 1:k, ",")){
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp] %>% 
+      .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+      .[,get(paste0("kmeans_nested_cluster_", k, "_current"))] %>% 
+      .[1:3] %>% 
+      paste0(., collapse = "|") -> tempp
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp,
+                 paste0("kmeans_nested_cluster_rank_3_", k, "_conc"):= 
+                   ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) %like% tempp, 1,0) ]
+  }
+  
+  
+  
+  #
+  acs <- merge(acs, centers_dist, by = c(paste0("kmeans_nested_cluster_", k, "_current"),
+                                         paste0("kmeans_nested_cluster_", k, "_ly")))
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_ly") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_ly") :=
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  
+  acs[,paste0("kmeans_nested_cluster_", k, "_conc") := ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) == 
+                                                                get(paste0("kmeans_nested_cluster_", k, "_ly")),1,0)]
+  
+  acs[, paste0("source_kmeans_nested_", k, "_N") := sum(N), by = get(paste0("kmeans_nested_cluster_", k, "_ly"))]
+  
+  acs[, paste0("kmeans_nested_cluster_", k, "_current") := factor(get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                  levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                                    .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                                    .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  acs[, paste0("kmeans_nested_cluster_", k, "_ly") := factor(get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                             levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                               .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                               .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  
+}
+
+df <- temp2$centers
+df_occ <- rownames(temp2$centers)
+
+for(i in 2:4){
+  k <- k_cand[i]
+  k_prev <- k_cand[(i - 1)]
+  stats::kmeans(df, centers = k, iter.max = 30) -> temp2
+  df_temp2 <- data.table(OCC2010 = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp2, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_current"))
+  setnames(df_temp2, "OCC2010", paste0("kmeans_nested_cluster_", k_prev, "_current"))
+  
+  df_temp2[, paste0("kmeans_nested_cluster_", k, "_current") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                       ",")]
+  df_temp2[,  paste0("kmeans_nested_cluster_", k_prev, "_current") := factor(get( paste0("kmeans_nested_cluster_", k_prev, "_current")), levels = acs[,levels(get( paste0("kmeans_nested_cluster_", k_prev, "_current")))])]
+  acs <- merge(acs, df_temp2, by =  paste0("kmeans_nested_cluster_", k_prev, "_current"))
+  
+  df_temp3 <- data.table(OCC10LY = df_occ, kmeans_nested_cluster = temp2$cluster)
+  setnames(df_temp3, "kmeans_nested_cluster", paste0("kmeans_nested_cluster_", k, "_ly"))
+  setnames(df_temp3, "OCC10LY", paste0("kmeans_nested_cluster_", k_prev, "_ly"))
+  
+  df_temp3[, paste0("kmeans_nested_cluster_", k, "_ly") := paste0(",", get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                                  ",")]
+  df_temp3[,  paste0("kmeans_nested_cluster_", k_prev, "_ly") := factor(get( paste0("kmeans_nested_cluster_", k_prev, "_ly")), levels = acs[,levels(get( paste0("kmeans_nested_cluster_", k_prev, "_current")))])]
+  
+  acs <- merge(acs, df_temp3, by = paste0("kmeans_nested_cluster_", k_prev, "_ly"))
+  
+  
+  centers <- temp2$centers
+  
+  melt(centers) %>% data.table() %>% .[,.(value = value[Var2 == "pc1"]), by = Var1] %>% .[order(value, decreasing = T), Var1] %>% .[1] -> high_skill
+  
+  centers_long <- melt(centers)
+  centers_long <- data.table(centers_long)
+  centers_long[, Var1 := paste0(",", Var1, ",")]
+  centers_long <- merge(centers_long, centers_long, by = "Var2", allow.cartesian = T)
+  centers_dist <- data.table(centers_long)[,.(geo_mean_dist = mean(abs(value.x - value.y))),
+                                           by = .(Var1.x, Var1.y)]
+  setnames(centers_dist, c(paste0("kmeans_nested_cluster_", k, "_current"), 
+                           paste0("kmeans_nested_cluster_", k, "_ly"), paste0("geo_nested_means_", k, "_dist")))
+  
+  # create vectors of nearest neighbors
+  for(k_temp in paste0(",", 1:k, ",")){
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp] %>% 
+      .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+      .[,get(paste0("kmeans_nested_cluster_", k, "_current"))] %>% 
+      .[1:3] %>% 
+      paste0(., collapse = "|") -> tempp
+    centers_dist[get(paste0("kmeans_nested_cluster_", k, "_ly")) == k_temp,
+                 paste0("kmeans_nested_cluster_rank_3_", k, "_conc"):= 
+                   ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) %like% tempp, 1,0) ]
+  }
+  
+  
+  
+  #
+  acs <- merge(acs, centers_dist, by = c(paste0("kmeans_nested_cluster_", k, "_current"),
+                                         paste0("kmeans_nested_cluster_", k, "_ly")))
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_ly") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  centers_dist[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+                 as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_ly") :=
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_ly"))))]
+  acs[,   paste0("kmeans_nested_cluster_", k, "_current") := 
+        as.numeric(gsub(",", "", get(  paste0("kmeans_nested_cluster_", k, "_current"))))]
+  
+  acs[,paste0("kmeans_nested_cluster_", k, "_conc") := ifelse(get(paste0("kmeans_nested_cluster_", k, "_current")) == 
+                                                                get(paste0("kmeans_nested_cluster_", k, "_ly")),1,0)]
+  
+  acs[, paste0("source_kmeans_nested_", k, "_N") := sum(N), by = get(paste0("kmeans_nested_cluster_", k, "_ly"))]
+  
+  acs[, paste0("kmeans_nested_cluster_", k, "_current") := factor(get(paste0("kmeans_nested_cluster_", k, "_current")), 
+                                                                  levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                                    .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                                    .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  acs[, paste0("kmeans_nested_cluster_", k, "_ly") := factor(get(paste0("kmeans_nested_cluster_", k, "_ly")), 
+                                                             levels = centers_dist[get(paste0("kmeans_nested_cluster_", k, "_current")) == high_skill] %>%
+                                                               .[order(get(paste0("geo_nested_means_", k, "_dist")))] %>%
+                                                               .[,get(paste0("kmeans_nested_cluster_", k, "_ly"))])]
+  
+  df <- temp2$centers
+  df_occ <- rownames(temp2$centers)
+  
+}
+
+### do some post processing to relabel the nested groups to make that more apparent
+### Occ level
+unique(acs$OCC2010) -> levs
+acs[, kmeans_nested_cluster_occ_ly := paste(kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly,
+                                            kmeans_nested_cluster_67_ly,kmeans_nested_cluster_120_ly, 
+                                            OCC10LY, sep = "_")]
+unique(acs$kmeans_nested_cluster_occ_ly) %>% 
+  tstrsplit(., "_", keep = 5) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_occ_ly := factor(kmeans_nested_cluster_occ_ly, levels = 
+                                               unique(acs$kmeans_nested_cluster_occ_ly)[temp] )]
+
+acs[, kmeans_nested_cluster_occ_current := paste(kmeans_nested_cluster_4_current, kmeans_nested_cluster_9_current,
+                                                 kmeans_nested_cluster_67_current, kmeans_nested_cluster_120_current,
+                                                 OCC2010, sep = "_")]
+unique(acs$kmeans_nested_cluster_occ_current) %>% 
+  tstrsplit(., "_", keep = 5) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_occ_current := factor(kmeans_nested_cluster_occ_current, levels = 
+                                                    unique(acs$kmeans_nested_cluster_occ_current)[temp] )]
+
+### 120
+levels(acs$kmeans_nested_cluster_120_ly) -> levs
+acs[, kmeans_nested_cluster_120_ly := paste(kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly,
+                                            kmeans_nested_cluster_67_ly,kmeans_nested_cluster_120_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_120_ly) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_120_ly := factor(kmeans_nested_cluster_120_ly, levels = 
+                                               unique(acs$kmeans_nested_cluster_120_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_120_current) -> levs
+acs[, kmeans_nested_cluster_120_current := paste(kmeans_nested_cluster_4_current, kmeans_nested_cluster_9_current,
+                                                 kmeans_nested_cluster_67_current, kmeans_nested_cluster_120_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_120_current) %>% 
+  tstrsplit(., "_", keep = 4) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_120_current := factor(kmeans_nested_cluster_120_current, levels = 
+                                                    unique(acs$kmeans_nested_cluster_120_current)[temp] )]
+### 67
+levels(acs$kmeans_nested_cluster_67_ly) -> levs
+acs[, kmeans_nested_cluster_67_ly := paste(kmeans_nested_cluster_4_ly, kmeans_nested_cluster_9_ly,
+                                           kmeans_nested_cluster_67_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_67_ly) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_67_ly := factor(kmeans_nested_cluster_67_ly, levels = 
+                                              unique(acs$kmeans_nested_cluster_67_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_67_current) -> levs
+acs[, kmeans_nested_cluster_67_current := paste(kmeans_nested_cluster_4_current, kmeans_nested_cluster_9_current,
+                                                kmeans_nested_cluster_67_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_67_current) %>% 
+  tstrsplit(., "_", keep = 3) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_67_current := factor(kmeans_nested_cluster_67_current, levels = 
+                                                   unique(acs$kmeans_nested_cluster_67_current)[temp] )]
+
+### 9
+levels(acs$kmeans_nested_cluster_9_ly) -> levs
+acs[, kmeans_nested_cluster_9_ly := paste(kmeans_nested_cluster_4_ly,
+                                          kmeans_nested_cluster_9_ly, sep = "_")]
+unique(acs$kmeans_nested_cluster_9_ly) %>% 
+  tstrsplit(., "_", keep =2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_9_ly := factor(kmeans_nested_cluster_9_ly, levels = 
+                                             unique(acs$kmeans_nested_cluster_9_ly)[temp] )]
+
+levels(acs$kmeans_nested_cluster_9_current) -> levs
+acs[, kmeans_nested_cluster_9_current := paste(kmeans_nested_cluster_4_current,
+                                               kmeans_nested_cluster_9_current, sep = "_")]
+unique(acs$kmeans_nested_cluster_9_current) %>% 
+  tstrsplit(., "_", keep = 2) %>% 
+  .[[1]] %>% 
+  match(levs, .) -> temp
+acs[, kmeans_nested_cluster_9_current := factor(kmeans_nested_cluster_9_current, levels = 
+                                                  unique(acs$kmeans_nested_cluster_9_current)[temp] )]
+
+
+```
